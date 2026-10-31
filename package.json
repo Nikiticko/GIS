@@ -9,11 +9,15 @@
     "preview": "vite preview",
     "api:dev": "tsx watch server/index.ts",
     "api:typecheck": "tsc -p server/tsconfig.json",
-    "db:generate": "drizzle-kit generate --config server/drizzle.config.ts"
+    "db:generate": "drizzle-kit generate --config server/drizzle.config.ts",
+    "api:bootstrap-admin": "tsx server/bootstrap-admin.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1161.0",
+    "@aws-sdk/lib-storage": "^3.1161.0",
     "@base-ui/react": "^1.9.0",
     "@fastify/cookie": "^11.1.5",
+    "@fastify/multipart": "^10.1.6",
     "@fontsource-variable/geist": "^5.3.0",
     "@supabase/supabase-js": "^2.57.0",
     "class-variance-authority": "^0.7.1",
