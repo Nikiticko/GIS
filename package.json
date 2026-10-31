@@ -11,7 +11,11 @@
     "api:typecheck": "tsc -p server/tsconfig.json",
     "db:generate": "drizzle-kit generate --config server/drizzle.config.ts",
     "api:bootstrap-admin": "tsx server/bootstrap-admin.ts",
-    "db:migrate": "tsx server/migrate.ts"
+    "db:migrate": "tsx server/migrate.ts",
+    "api:build": "tsc -p server/tsconfig.json --noEmit false --outDir dist-api",
+    "api:start": "NODE_ENV=production node dist-api/index.js",
+    "db:migrate:production": "node dist-api/migrate.js",
+    "api:bootstrap-admin:production": "node dist-api/bootstrap-admin.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",

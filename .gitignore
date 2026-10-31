@@ -5,3 +5,4 @@ dist/
 !.env.example
 *.tsbuildinfo
 *.md 
+dist-api/

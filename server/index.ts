@@ -15,12 +15,13 @@ const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const pool = new pg.Pool({ connectionString });
 const db = drizzle(pool);
-const app = Fastify({ logger: true, trustProxy: false });
+class SessionExpired extends Error { statusCode = 401; }
+const app = Fastify({ logger: true, trustProxy: process.env.TRUST_PROXY || false });
 app.setErrorHandler((error, request, reply) => {
   const status = (error as { statusCode?: number }).statusCode;
   const code = status && status >= 400 && status < 500 ? status : 500;
   request.log.error({ statusCode: code }, "Помилка обробки запиту");
-  return reply.code(code).send({ error: code === 413 ? "Файл перевищує допустимий розмір." : code < 500 ? "Некоректний запит." : "Не вдалося виконати запит." });
+  return reply.code(code).send({ error: error instanceof SessionExpired ? "Сесію завершено." : code === 413 ? "Файл перевищує допустимий розмір." : code < 500 ? "Некоректний запит." : "Не вдалося виконати запит." });
 });
 await app.register(cookie);
 await app.register(multipart, { limits: { files: 1, fileSize: 2_147_483_647 } });
@@ -34,6 +35,9 @@ app.post("/api/auth/login", async (request, reply) => {
   const now = Date.now();
   const attempt = attempts.get(request.ip);
   if (attempt && attempt.until > now && attempt.count >= 10) return reply.code(429).send({ error: "Забагато спроб входу. Спробуйте пізніше." });
+  const current = attempt && attempt.until > now ? attempt : { count: 0, until: now + 15 * 60_000 };
+  current.count++;
+  attempts.set(request.ip, current);
   const parsed = z.object({ code: z.string().regex(/^\d{6}$/) }).safeParse(request.body);
   const token = randomBytes(32).toString("hex");
   const user = parsed.success ? await db.transaction(async (tx) => {
@@ -43,9 +47,6 @@ app.post("/api/auth/login", async (request, reply) => {
     return matched;
   }) : undefined;
   if (!user) {
-    const current = attempt && attempt.until > now ? attempt : { count: 0, until: now + 15 * 60_000 };
-    current.count++;
-    attempts.set(request.ip, current);
     return reply.code(401).send({ error: "Невірний код або обліковий запис неактивний." });
   }
   attempts.delete(request.ip);
@@ -111,6 +112,7 @@ app.post("/api/users", async (request, reply) => {
   for (let i = 0; i < 20; i++) {
     try {
       const result = await db.transaction(async (tx) => {
+        if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
         const [user] = await tx.insert(users).values({ ...input.data, phone: input.data.phone || null, foreman: input.data.foreman ?? false, keyCode: String(randomInt(0, 1_000_000)).padStart(6, "0") }).returning();
         await tx.insert(audit).values({ actorId: actor.id, entityType: "user", entityId: user.id, action: "CREATE" });
         return user;
@@ -129,6 +131,7 @@ app.patch("/api/users/:id", async (request, reply) => {
   const params = uuidParam.safeParse(request.params), input = updateUser.safeParse(request.body);
   if (!params.success || !input.success || !Object.keys(input.data).length) return reply.code(400).send({ error: "Некоректні дані користувача." });
   return db.transaction(async (tx) => {
+        if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
     const [old] = await tx.select().from(users).where(eq(users.id, params.data.id)).for("update");
     if (!old) return reply.code(404).send({ error: "Користувача не знайдено." });
     if (old.role === "ADMIN" && (input.data.role !== undefined || input.data.active === false)) return reply.code(403).send({ error: "Роль і активність адміністратора захищені." });
@@ -157,6 +160,7 @@ app.post("/api/users/:id/sessions/revoke", async (request, reply) => {
   const params = uuidParam.safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   return db.transaction(async (tx) => {
+        if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
     const [user] = await tx.select({ id: users.id }).from(users).where(eq(users.id, params.data.id)).for("update");
     if (!user) return reply.code(404).send({ error: "Користувача не знайдено." });
     await tx.delete(sessions).where(eq(sessions.userId, user.id));
@@ -173,6 +177,7 @@ app.post("/api/users/:id/key-code/reissue", async (request, reply) => {
   for (let i = 0; i < 20; i++) {
     try {
       return await db.transaction(async (tx) => {
+        if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
         const [user] = await tx.select().from(users).where(eq(users.id, params.data.id)).for("update");
         if (!user) return reply.code(404).send({ error: "Користувача не знайдено." });
         let code: string;
@@ -213,6 +218,7 @@ app.post("/api/:kind", async (request, reply) => {
   const data = (kind.data.kind === "vehicles" ? vehicleInput : directoryName).safeParse(request.body);
   if (!data.success) return reply.code(400).send({ error: "Некоректні дані." });
   return db.transaction(async (tx) => {
+        if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
     const [row] = kind.data.kind === "vehicles"
       ? await tx.insert(vehicles).values(data.data as z.infer<typeof vehicleInput>).returning()
       : await tx.insert(workTypes).values(data.data).returning();
@@ -228,6 +234,7 @@ app.patch("/api/:kind/:id", async (request, reply) => {
   const data = (params.data.kind === "vehicles" ? vehicleInput.partial() : z.object({ active: z.boolean() }).strict()).safeParse(request.body);
   if (!data.success || !Object.keys(data.data).length) return reply.code(400).send({ error: "Некоректні дані." });
   return db.transaction(async (tx) => {
+        if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
     const table = params.data.kind === "vehicles" ? vehicles : workTypes;
     const [old] = await tx.select().from(table).where(eq(table.id, params.data.id)).for("update");
     if (!old) return reply.code(404).send({ error: "Запис не знайдено." });
@@ -572,7 +579,11 @@ function scheduleCleanup() {
   })().catch(() => { app.log.error("Не вдалося виконати очищення сховища; буде повторна спроба"); }).finally(() => { cleanupTask = undefined; });
   return cleanupTask;
 }
-const cleanupTimer = setInterval(() => { void scheduleCleanup(); }, 60_000);
+const cleanupTimer = setInterval(() => {
+  void scheduleCleanup();
+  const now = Date.now();
+  for (const [ip, attempt] of attempts) if (attempt.until <= now) attempts.delete(ip);
+}, 60_000);
 app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; storage?.destroy(); await pool.end(); });
 void scheduleCleanup();
-await app.listen({ host: "127.0.0.1", port: Number(process.env.PORT || 3000) });
+await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
