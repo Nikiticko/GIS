@@ -17,6 +17,9 @@ try {
     await tx.insert(users).values({ name, role: "ADMIN", keyCode: String(randomInt(0, 1_000_000)).padStart(6, "0") });
   });
   console.log("Початкового адміністратора створено.");
+} catch {
+  console.error("Не вдалося створити адміністратора. Перевірте підключення та переконайтеся, що база порожня.");
+  process.exitCode = 1;
 } finally {
   await pool.end();
 }

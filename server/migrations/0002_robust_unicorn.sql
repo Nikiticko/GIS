@@ -1,0 +1,2 @@
+ALTER TABLE "attachments" ADD COLUMN "storage_deleted_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "attachments_cleanup_idx" ON "attachments" USING btree ("id") WHERE "attachments"."deleted_at" is not null and "attachments"."storage_deleted_at" is null;

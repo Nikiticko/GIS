@@ -5,7 +5,7 @@ import { DeleteObjectCommand, GetObjectCommand, S3Client } from "@aws-sdk/client
 import { Upload } from "@aws-sdk/lib-storage";
 import { Transform } from "node:stream";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
@@ -16,6 +16,12 @@ if (!connectionString) throw new Error("DATABASE_URL is required");
 const pool = new pg.Pool({ connectionString });
 const db = drizzle(pool);
 const app = Fastify({ logger: true, trustProxy: false });
+app.setErrorHandler((error, request, reply) => {
+  const status = (error as { statusCode?: number }).statusCode;
+  const code = status && status >= 400 && status < 500 ? status : 500;
+  request.log.error({ statusCode: code }, "Помилка обробки запиту");
+  return reply.code(code).send({ error: code === 413 ? "Файл перевищує допустимий розмір." : code < 500 ? "Некоректний запит." : "Не вдалося виконати запит." });
+});
 await app.register(cookie);
 await app.register(multipart, { limits: { files: 1, fileSize: 2_147_483_647 } });
 const bucket = process.env.S3_BUCKET;
@@ -72,6 +78,16 @@ async function currentUser(token: string | undefined) {
   const [user] = await db.select({ id: users.id, name: users.name, role: users.role, active: users.active }).from(sessions)
     .innerJoin(users, eq(sessions.userId, users.id)).where(eq(sessions.id, token)).limit(1);
   return user?.active ? user : undefined;
+}
+
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+async function sessionStillValid(tx: Transaction, token: string | undefined, actor: { id: string; role: string }) {
+  if (!token) return "unauthorized" as const;
+  const [current] = await tx.select({ id: users.id, role: users.role, active: users.active }).from(users).where(eq(users.id, actor.id)).for("share");
+  if (!current?.active) return "unauthorized" as const;
+  const [session] = await tx.select({ id: sessions.id }).from(sessions).where(and(eq(sessions.id, token), eq(sessions.userId, actor.id))).for("share");
+  if (!session) return "unauthorized" as const;
+  return current.role === actor.role ? "ok" as const : "changed" as const;
 }
 
 async function requireAdmin(request: import("fastify").FastifyRequest, reply: import("fastify").FastifyReply) {
@@ -243,6 +259,8 @@ app.post("/api/projects", async (request, reply) => {
   if (!input.success || (actor.role === "ADMIN" && !input.data.managerId) || (actor.role === "MANAGER" && input.data.managerId && input.data.managerId !== actor.id)) return reply.code(400).send({ error: "Некоректні дані об’єкта." });
   const managerId = actor.role === "MANAGER" ? actor.id : input.data.managerId!;
   return db.transaction(async (tx) => {
+    const sessionStatus = await sessionStillValid(tx, request.cookies[sessionCookie], actor);
+    if (sessionStatus !== "ok") return reply.code(sessionStatus === "changed" ? 409 : 401).send({ error: sessionStatus === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
     const [manager] = await tx.select().from(users).where(eq(users.id, managerId)).for("share");
     const [workType] = await tx.select().from(workTypes).where(eq(workTypes.id, input.data.workTypeId)).for("share");
     if (!manager?.active || manager.role !== "MANAGER" || !workType?.active) return reply.code(400).send({ error: "Оберіть активного менеджера та тип робіт." });
@@ -276,6 +294,8 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
   const params = uuidParam.safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   return db.transaction(async (tx) => {
+    const sessionStatus = await sessionStillValid(tx, request.cookies[sessionCookie], actor);
+    if (sessionStatus !== "ok") return reply.code(sessionStatus === "changed" ? 409 : 401).send({ error: sessionStatus === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
     const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
     if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
     if (actor.role !== "ADMIN" && !(actor.role === "MANAGER" && project.managerId === actor.id)) return reply.code(403).send({ error: "Недостатньо прав." });
@@ -303,6 +323,8 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
   if (!params.success || !input.success) return reply.code(400).send({ error: "Некоректний виробничий план." });
   const plan = input.data;
   return db.transaction(async (tx) => {
+    const sessionStatus = await sessionStillValid(tx, request.cookies[sessionCookie], actor);
+    if (sessionStatus !== "ok") return reply.code(sessionStatus === "changed" ? 409 : 401).send({ error: sessionStatus === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gis_project_planning'))`);
     const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
     if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
@@ -365,6 +387,8 @@ app.patch("/api/projects/:id", async (request, reply) => {
   const params = uuidParam.safeParse(request.params), input = projectFields.partial().safeParse(request.body);
   if (!params.success || !input.success || !Object.keys(input.data).length) return reply.code(400).send({ error: "Некоректні дані об’єкта." });
   return db.transaction(async (tx) => {
+    const sessionStatus = await sessionStillValid(tx, request.cookies[sessionCookie], actor);
+    if (sessionStatus !== "ok") return reply.code(sessionStatus === "changed" ? 409 : 401).send({ error: sessionStatus === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
     const [old] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
     if (!old || old.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
     if (actor.role !== "ADMIN" && actor.role !== "PRODUCTION_HEAD" && !(actor.role === "MANAGER" && actor.id === old.managerId)) return reply.code(403).send({ error: "Недостатньо прав." });
@@ -418,6 +442,7 @@ app.get("/api/audit", async (request, reply) => {
 });
 
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() });
+class AttachmentAccessChanged extends Error {}
 async function attachmentAccess(projectId: string, actor: NonNullable<Awaited<ReturnType<typeof currentUser>>>, edit: boolean) {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return false;
@@ -457,15 +482,28 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
     await upload.done();
     if (file.file.truncated) throw new Error("Файл перевищує допустимий розмір.");
     const refreshedActor = await currentUser(request.cookies[sessionCookie]);
-    if (!refreshedActor || refreshedActor.id !== actor.id || !await attachmentAccess(params.data.id, refreshedActor, true)) throw new Error("Доступ змінено під час завантаження.");
+    if (!refreshedActor || refreshedActor.id !== actor.id || !await attachmentAccess(params.data.id, refreshedActor, true)) throw new AttachmentAccessChanged();
     const attachment = await db.transaction(async (tx) => {
+      if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new AttachmentAccessChanged();
+      const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
+      if (!project || project.archivedAt || !(actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD" || (actor.role === "MANAGER" && project.managerId === actor.id))) throw new AttachmentAccessChanged();
       const [item] = await tx.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size }).returning();
       await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: item.id, action: "CREATE" });
       return item;
     });
     return reply.code(201).send({ id: attachment.id, projectId: attachment.projectId, uploaderId: attachment.uploaderId, name: attachment.name, contentType: attachment.contentType, size: attachment.size, createdAt: attachment.createdAt });
   } catch (error) {
-    await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })).catch(() => request.log.error("Не вдалося видалити незавершене вкладення"));
+    try {
+      await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    } catch {
+      try {
+        await db.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size, deletedAt: new Date() });
+        void scheduleCleanup();
+      } catch {
+        request.log.error("Не вдалося зберегти завдання очищення незавершеного вкладення");
+      }
+    }
+    if (error instanceof AttachmentAccessChanged) return reply.code(403).send({ error: "Доступ до об’єкта змінився під час завантаження." });
     throw error;
   }
 });
@@ -490,24 +528,51 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
   if (!await attachmentAccess(params.data.id, actor, true)) return reply.code(403).send({ error: "Недостатньо прав." });
   if (!storage || !bucket) return reply.code(503).send({ error: "Сховище файлів не налаштовано." });
   const item = await db.transaction(async (tx) => {
+    const sessionStatus = await sessionStillValid(tx, request.cookies[sessionCookie], actor);
+    if (sessionStatus !== "ok") return sessionStatus;
+    const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
+    if (!project || project.archivedAt || !(actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD" || (actor.role === "MANAGER" && project.managerId === actor.id))) return false;
     const [found] = await tx.select().from(attachments).where(and(eq(attachments.id, params.data.attachmentId), eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt))).for("update");
     if (!found) return null;
     if (actor.role !== "ADMIN" && found.uploaderId !== actor.id) return false;
-    try {
-      await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: found.storageKey }));
-    } catch {
-      request.log.error({ attachmentId: found.id }, "Не вдалося видалити файл зі сховища");
-      return "storage-error" as const;
-    }
     await tx.update(attachments).set({ deletedAt: new Date() }).where(eq(attachments.id, found.id));
     await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: found.id, action: "DELETE" });
     return found;
   });
+  if (item === "changed" || item === "unauthorized") return reply.code(item === "changed" ? 409 : 401).send({ error: item === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
   if (item === null) return reply.code(404).send({ error: "Файл не знайдено." });
   if (item === false) return reply.code(403).send({ error: "Можна видалити лише власний файл." });
-  if (item === "storage-error") return reply.code(503).send({ error: "Не вдалося видалити файл зі сховища. Спробуйте ще раз." });
+  void scheduleCleanup();
   return { ok: true };
 });
 
-app.addHook("onClose", async () => { storage?.destroy(); await pool.end(); });
+let cleanupTask: Promise<void> | undefined;
+function scheduleCleanup() {
+  if (!storage || !bucket) return Promise.resolve();
+  if (cleanupTask) return cleanupTask;
+  const client = storage;
+  const targetBucket = bucket;
+  cleanupTask = (async () => {
+    let after: string | undefined;
+    for (;;) {
+      const batch = await db.select({ id: attachments.id, key: attachments.storageKey }).from(attachments)
+        .where(and(isNotNull(attachments.deletedAt), isNull(attachments.storageDeletedAt), after ? gt(attachments.id, after) : undefined))
+        .orderBy(attachments.id).limit(100);
+      if (!batch.length) break;
+      for (const item of batch) {
+        try {
+          await client.send(new DeleteObjectCommand({ Bucket: targetBucket, Key: item.key }));
+          await db.update(attachments).set({ storageDeletedAt: new Date() }).where(eq(attachments.id, item.id));
+        } catch {
+          app.log.error({ attachmentId: item.id }, "Не вдалося видалити файл зі сховища; буде повторна спроба");
+        }
+      }
+      after = batch[batch.length - 1].id;
+    }
+  })().catch(() => { app.log.error("Не вдалося виконати очищення сховища; буде повторна спроба"); }).finally(() => { cleanupTask = undefined; });
+  return cleanupTask;
+}
+const cleanupTimer = setInterval(() => { void scheduleCleanup(); }, 60_000);
+app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; storage?.destroy(); await pool.end(); });
+void scheduleCleanup();
 await app.listen({ host: "127.0.0.1", port: Number(process.env.PORT || 3000) });

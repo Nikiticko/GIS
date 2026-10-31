@@ -15,6 +15,13 @@
       "when": 1793445430658,
       "tag": "0001_uneven_hitman",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793445728696,
+      "tag": "0002_robust_unicorn",
+      "breakpoints": true
     }
   ]
 }

@@ -35,8 +35,8 @@ export const projectVehicles = pgTable("production_project_vehicles", {
 }, (t) => [uniqueIndex("project_vehicle_idx").on(t.projectId, t.vehicleId), index("project_vehicle_vehicle_idx").on(t.vehicleId)]);
 export const attachments = pgTable("attachments", {
   id: id(), projectId: uuid("project_id").notNull().references(() => projects.id), uploaderId: uuid("uploader_id").notNull().references(() => users.id),
-  name: text("name").notNull(), storageKey: text("storage_key").notNull().unique(), contentType: text("content_type").notNull(), size: integer("size").notNull(), createdAt: createdAt(), deletedAt: timestamp("deleted_at", { withTimezone: true }),
-}, (t) => [index("attachments_project_idx").on(t.projectId)]);
+  name: text("name").notNull(), storageKey: text("storage_key").notNull().unique(), contentType: text("content_type").notNull(), size: integer("size").notNull(), createdAt: createdAt(), deletedAt: timestamp("deleted_at", { withTimezone: true }), storageDeletedAt: timestamp("storage_deleted_at", { withTimezone: true }),
+}, (t) => [index("attachments_project_idx").on(t.projectId), index("attachments_cleanup_idx").on(t.id).where(sql`${t.deletedAt} is not null and ${t.storageDeletedAt} is null`)]);
 export const notifications = pgTable("notifications", {
   id: id(), userId: uuid("user_id").notNull().references(() => users.id), type: text("type").notNull(), projectId: uuid("project_id").references(() => projects.id), subjectUserId: uuid("subject_user_id").references(() => users.id), createdAt: createdAt(), readAt: timestamp("read_at", { withTimezone: true }),
 }, (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)]);
