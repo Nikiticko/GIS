@@ -1,0 +1,63 @@
+import { useState, type FormEvent } from "react";
+import { api, type AuditEntry, type Role, type User, type Vehicle, type WorkType } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
+const roles: Record<Role, string> = { ADMIN: "Адміністратор", MANAGER: "Менеджер", PRODUCTION_HEAD: "Керівник виробництва", PRODUCTION_EMPLOYEE: "Працівник виробництва" };
+const message = (reason: unknown) => reason instanceof Error ? reason.message : "Не вдалося виконати дію.";
+
+export function ProductionUsers({ users, refresh }: { users: User[]; refresh: () => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [role, setRole] = useState<Exclude<Role, "ADMIN">>("MANAGER");
+  const [phone, setPhone] = useState("");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  async function act(work: () => Promise<unknown>) {
+    setPending(true); setError("");
+    try { await work(); await refresh(); } catch (reason) { setError(message(reason)); } finally { setPending(false); }
+  }
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    await act(async () => { await api.createUser({ name, role, phone: phone || null }); setName(""); setPhone(""); });
+  }
+  return <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">АДМІНІСТРУВАННЯ</p><h1>Користувачі</h1></div></div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <form className="production-panel form-stack" onSubmit={create}><h2>Додати користувача</h2><label>ПІБ<Input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Роль<select className="form-select" value={role} onChange={(event) => setRole(event.target.value as typeof role)}>{Object.entries(roles).filter(([key]) => key !== "ADMIN").map(([key, title]) => <option value={key} key={key}>{title}</option>)}</select></label><label>Телефон<Input value={phone} onChange={(event) => setPhone(event.target.value)} type="tel" /></label><Button type="submit" disabled={pending}>Створити</Button></form>
+    <div className="production-list">{users.map((user) => <UserCard key={user.id} user={user} pending={pending} act={act} />)}</div>
+  </section>;
+}
+function UserCard({ user, pending, act }: { user: User; pending: boolean; act: (work: () => Promise<unknown>) => Promise<void> }) {
+  const [name, setName] = useState(user.name);
+  const [phone, setPhone] = useState(user.phone ?? "");
+  const [role, setRole] = useState(user.role);
+  const [foreman, setForeman] = useState(user.foreman);
+  const [showCode, setShowCode] = useState(false);
+  const admin = user.role === "ADMIN";
+  return <article className="production-panel form-stack"><div><strong>{user.name}</strong> · {roles[user.role]} · {user.active ? "Активний" : "Неактивний"}</div>
+    <label>ПІБ<Input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Телефон<Input value={phone} type="tel" onChange={(event) => setPhone(event.target.value)} /></label>
+    {!admin && <label>Роль<select className="form-select" value={role} onChange={(event) => { const value = event.target.value as Role; setRole(value); if (value !== "PRODUCTION_EMPLOYEE") setForeman(false); }}>{Object.entries(roles).filter(([key]) => key !== "ADMIN").map(([key, title]) => <option value={key} key={key}>{title}</option>)}</select></label>}
+    {role === "PRODUCTION_EMPLOYEE" && <label><input type="checkbox" checked={foreman} onChange={(event) => setForeman(event.target.checked)} /> Бригадир</label>}
+    <div className="production-actions"><Button type="button" variant="outline" disabled={pending || !name.trim()} onClick={() => void act(() => api.updateUser(user.id, { name, phone: phone || null, ...(!admin ? { role: role as Exclude<Role, "ADMIN">, foreman } : {}) }))}>Зберегти</Button>
+      {!admin && <Button type="button" variant="outline" disabled={pending} onClick={() => void act(() => api.updateUser(user.id, { active: !user.active }))}>{user.active ? "Деактивувати" : "Активувати"}</Button>}
+      <Button type="button" variant="outline" disabled={pending} onClick={() => setShowCode((current) => !current)}>{showCode ? "Приховати код" : "Показати код"}</Button>
+      <Button type="button" variant="outline" disabled={pending} onClick={() => { if (window.confirm("Перевипустити код і завершити всі сесії?")) void act(() => api.reissueKey(user.id)); }}>Перевипустити код</Button>
+      <Button type="button" variant="outline" disabled={pending} onClick={() => { if (window.confirm("Завершити всі сесії користувача?")) void act(() => api.revokeSessions(user.id)); }}>Завершити сесії</Button></div>
+    {showCode && <p>Ключ-код: <strong>{user.keyCode}</strong></p>}
+  </article>;
+}
+
+export function ProductionDirectories({ workTypes, vehicles, refresh }: { workTypes: WorkType[]; vehicles: Vehicle[]; refresh: () => Promise<void> }) {
+  const [workType, setWorkType] = useState(""); const [name, setName] = useState(""); const [registration, setRegistration] = useState(""); const [error, setError] = useState(""); const [pending, setPending] = useState(false);
+  async function act(work: () => Promise<unknown>) { setPending(true); setError(""); try { await work(); await refresh(); } catch (reason) { setError(message(reason)); } finally { setPending(false); } }
+  return <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">АДМІНІСТРУВАННЯ</p><h1>Довідники</h1></div></div>{error && <p className="form-error" role="alert">{error}</p>}
+    <div className="production-panel form-stack"><h2>Типи робіт</h2><form className="production-actions" onSubmit={(event) => { event.preventDefault(); void act(async () => { await api.createWorkType(workType); setWorkType(""); }); }}><Input aria-label="Назва типу робіт" value={workType} onChange={(event) => setWorkType(event.target.value)} required /><Button type="submit" disabled={pending}>Додати</Button></form>{workTypes.map((type) => <div className="production-row" key={type.id}><span>{type.name} · {type.active ? "Активний" : "Неактивний"}</span><Button variant="outline" disabled={pending} onClick={() => void act(() => api.updateWorkType(type.id, !type.active))}>{type.active ? "Деактивувати" : "Активувати"}</Button></div>)}</div>
+    <div className="production-panel form-stack"><h2>Автомобілі</h2><form className="form-stack" onSubmit={(event) => { event.preventDefault(); void act(async () => { await api.createVehicle(name, registration); setName(""); setRegistration(""); }); }}><label>Назва<Input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Державний номер<Input value={registration} onChange={(event) => setRegistration(event.target.value)} required /></label><Button type="submit" disabled={pending}>Додати автомобіль</Button></form>{vehicles.map((vehicle) => <VehicleCard key={vehicle.id} vehicle={vehicle} pending={pending} act={act} />)}</div>
+  </section>;
+}
+function VehicleCard({ vehicle, pending, act }: { vehicle: Vehicle; pending: boolean; act: (work: () => Promise<unknown>) => Promise<void> }) {
+  const [name, setName] = useState(vehicle.name); const [registration, setRegistration] = useState(vehicle.registration);
+  return <div className="production-row"><Input aria-label="Назва автомобіля" value={name} onChange={(event) => setName(event.target.value)} /><Input aria-label="Державний номер" value={registration} onChange={(event) => setRegistration(event.target.value)} /><Button variant="outline" disabled={pending || !name.trim() || !registration.trim()} onClick={() => void act(() => api.updateVehicle(vehicle.id, { name, registration }))}>Зберегти</Button><Button variant="outline" disabled={pending} onClick={() => void act(() => api.updateVehicle(vehicle.id, { active: !vehicle.active }))}>{vehicle.active ? "Деактивувати" : "Активувати"}</Button></div>;
+}
+export function ProductionAudit({ entries, users }: { entries: AuditEntry[]; users: User[] }) {
+  return <section className="page-stack"><div className="page-heading"><h1>Журнал змін</h1></div><div className="production-list">{entries.map((entry) => <article className="production-panel" key={entry.id}><strong>{entry.action} · {entry.entityType}</strong><p>{users.find((user) => user.id === entry.actorId)?.name ?? "—"} · {new Date(entry.createdAt).toLocaleString("uk-UA")}</p>{entry.field && <p>{entry.field}: {entry.oldValue ?? "—"} → {entry.newValue ?? "—"}</p>}</article>)}{!entries.length && <p>Записів поки немає.</p>}</div></section>;
+}

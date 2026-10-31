@@ -128,7 +128,7 @@ app.patch("/api/users/:id", async (request, reply) => {
       await tx.delete(sessions).where(eq(sessions.userId, old.id));
       if (old.role === "PRODUCTION_EMPLOYEE") {
         const heads = await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"));
-        if (heads.length) await tx.insert(notifications).values(heads.map((head) => ({ userId: head.id, type: "EMPLOYEE_DEACTIVATED" })));
+        if (heads.length) await tx.insert(notifications).values(heads.map((head) => ({ userId: head.id, type: "EMPLOYEE_DEACTIVATED", subjectUserId: old.id })));
       }
     }
     return updated;
@@ -355,7 +355,8 @@ app.get("/api/projects/:id", async (request, reply) => {
   const team = await db.select({ id: users.id, name: users.name, phone: users.phone, responsible: assignments.responsible }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, row.project.id));
   if (actor.role === "PRODUCTION_EMPLOYEE" && (row.project.archivedAt || !team.some((person) => person.id === actor.id))) return reply.code(403).send({ error: "Недостатньо прав." });
   const cars = await db.select({ id: vehicles.id, name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, row.project.id));
-  return { ...row, team, vehicles: cars };
+  const [manager] = await db.select({ name: users.name }).from(users).where(eq(users.id, row.project.managerId));
+  return { ...row, managerName: manager?.name ?? "", team, vehicles: cars };
 });
 
 app.patch("/api/projects/:id", async (request, reply) => {
@@ -400,7 +401,7 @@ app.get("/api/employees", async (request, reply) => {
 app.get("/api/notifications", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
-  return db.select().from(notifications).where(eq(notifications.userId, actor.id)).orderBy(sql`${notifications.createdAt} desc`);
+  return db.select({ notification: notifications, subjectName: users.name }).from(notifications).leftJoin(users, eq(notifications.subjectUserId, users.id)).where(eq(notifications.userId, actor.id)).orderBy(sql`${notifications.createdAt} desc`).then((rows) => rows.map(({ notification, subjectName }) => ({ ...notification, subjectName })));
 });
 app.post("/api/notifications/:id/read", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);

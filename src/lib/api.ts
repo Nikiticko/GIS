@@ -13,11 +13,12 @@ export interface Project {
 }
 export interface ProjectRow { project: Project; workTypeName: string; status: Status }
 export interface ProjectDetail extends ProjectRow {
+  managerName: string;
   team: { id: string; name: string; phone: string | null; responsible: boolean }[];
   vehicles: Pick<Vehicle, "id" | "name" | "registration">[];
 }
 export interface Attachment { id: string; projectId: string; uploaderId: string; name: string; contentType: string; size: number; createdAt: string }
-export interface Notification { id: string; type: string; projectId: string | null; createdAt: string; readAt: string | null }
+export interface Notification { id: string; type: string; projectId: string | null; subjectName: string | null; createdAt: string; readAt: string | null }
 export interface AuditEntry { id: string; actorId: string; entityType: string; entityId: string; action: string; field: string | null; oldValue: string | null; newValue: string | null; createdAt: string }
 export interface Conflict { resourceId: string; resourceName: string; projectId: string; projectName: string; overlapStart: string; overlapEnd: string }
 export interface Conflicts { employees: Conflict[]; vehicles: Conflict[] }

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { type ProjectValues, type User, type WorkType } from "@/lib/api";
+import { type ProjectValues, type User, type WorkType, type Project } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,11 +8,12 @@ import { Textarea } from "@/components/ui/textarea";
 type Values = { name: string; managerId: string; workTypeId: string; address: string; gps: string; volume: string; information: string; desiredStart: string; desiredEnd: string };
 const empty: Values = { name: "", managerId: "", workTypeId: "", address: "", gps: "", volume: "", information: "", desiredStart: "", desiredEnd: "" };
 
-export function ProductionProjectForm({ workTypes, managers, isAdmin, onSave, onCancel }: {
-  workTypes: WorkType[]; managers: User[]; isAdmin: boolean;
+export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, isManager, onSave, onCancel }: {
+  workTypes: WorkType[]; managers: User[]; isAdmin: boolean; initial?: Project; isManager?: boolean;
   onSave: (values: ProjectValues) => Promise<void>; onCancel: () => void;
 }) {
-  const [values, setValues] = useState<Values>(empty);
+  const [values, setValues] = useState<Values>(() => initial ? { name: initial.name, managerId: initial.managerId, workTypeId: initial.workTypeId, address: initial.address ?? "", gps: initial.gps ?? "", volume: initial.volume ?? "", information: initial.information ?? "", desiredStart: initial.desiredStart ?? "", desiredEnd: initial.desiredEnd ?? "" } : empty);
+  const restricted = Boolean(initial?.plannedStart && isManager);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const change = (key: keyof Values, value: string) => setValues((current) => ({ ...current, [key]: value }));
@@ -29,14 +30,14 @@ export function ProductionProjectForm({ workTypes, managers, isAdmin, onSave, on
   }
   return <form className="form-stack" onSubmit={submit}>
     <div className="field"><Label htmlFor="project-name">Назва об’єкта</Label><Input id="project-name" value={values.name} onChange={(event) => change("name", event.target.value)} required /></div>
-    {isAdmin && <div className="field"><Label htmlFor="project-manager">Відповідальний менеджер</Label><select id="project-manager" className="form-select" value={values.managerId} onChange={(event) => change("managerId", event.target.value)} required><option value="">Оберіть менеджера</option>{managers.filter((manager) => manager.active && manager.role === "MANAGER").map((manager) => <option key={manager.id} value={manager.id}>{manager.name}</option>)}</select></div>}
-    <div className="field"><Label htmlFor="project-work-type">Тип робіт</Label><select id="project-work-type" className="form-select" value={values.workTypeId} onChange={(event) => change("workTypeId", event.target.value)} required><option value="">Оберіть тип робіт</option>{workTypes.filter((type) => type.active).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></div>
+    {isAdmin && <div className="field"><Label htmlFor="project-manager">Відповідальний менеджер</Label><select id="project-manager" className="form-select" value={values.managerId} onChange={(event) => change("managerId", event.target.value)} required><option value="">Оберіть менеджера</option>{managers.filter((manager) => (manager.active && manager.role === "MANAGER") || manager.id === initial?.managerId).map((manager) => <option key={manager.id} value={manager.id}>{manager.name}</option>)}</select></div>}
+    <div className="field"><Label htmlFor="project-work-type">Тип робіт</Label><select id="project-work-type" className="form-select" value={values.workTypeId} disabled={restricted} onChange={(event) => change("workTypeId", event.target.value)} required><option value="">Оберіть тип робіт</option>{workTypes.filter((type) => type.active || type.id === initial?.workTypeId).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></div>
     <div className="field"><Label htmlFor="project-address">Адреса</Label><Input id="project-address" value={values.address} onChange={(event) => change("address", event.target.value)} /></div>
     <div className="field"><Label htmlFor="project-gps">GPS-координати</Label><Input id="project-gps" value={values.gps} onChange={(event) => change("gps", event.target.value)} /></div>
     <div className="field"><Label htmlFor="project-volume">Обсяг робіт</Label><Input id="project-volume" value={values.volume} onChange={(event) => change("volume", event.target.value)} /></div>
-    <div className="planning-dates"><div className="field"><Label htmlFor="desired-start">Бажаний початок</Label><Input id="desired-start" type="date" value={values.desiredStart} onChange={(event) => change("desiredStart", event.target.value)} /></div><span className="date-arrow">—</span><div className="field"><Label htmlFor="desired-end">Бажане завершення</Label><Input id="desired-end" type="date" value={values.desiredEnd} onChange={(event) => change("desiredEnd", event.target.value)} /></div></div>
+    <div className="planning-dates"><div className="field"><Label htmlFor="desired-start">Бажаний початок</Label><Input id="desired-start" type="date" disabled={restricted} value={values.desiredStart} onChange={(event) => change("desiredStart", event.target.value)} /></div><span className="date-arrow">—</span><div className="field"><Label htmlFor="desired-end">Бажане завершення</Label><Input id="desired-end" type="date" disabled={restricted} value={values.desiredEnd} onChange={(event) => change("desiredEnd", event.target.value)} /></div></div>
     <div className="field"><Label htmlFor="project-info">Додаткова інформація</Label><Textarea id="project-info" value={values.information} onChange={(event) => change("information", event.target.value)} rows={3} /></div>
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="modal-footer"><Button type="button" variant="outline" onClick={onCancel} disabled={saving}>Скасувати</Button><Button type="submit" className="primary-shadcn" disabled={saving}>{saving ? "Зберігаємо…" : "Створити об’єкт"}</Button></div>
+    <div className="modal-footer"><Button type="button" variant="outline" onClick={onCancel} disabled={saving}>Скасувати</Button><Button type="submit" className="primary-shadcn" disabled={saving}>{saving ? "Зберігаємо…" : (initial ? "Зберегти зміни" : "Створити об’єкт")}</Button></div>
   </form>;
 }
