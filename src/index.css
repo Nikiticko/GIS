@@ -542,3 +542,8 @@ button:disabled { cursor: not-allowed; }
     @apply font-sans;
   }
 }
+
+.login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.login-card { width: min(100%, 400px); display: flex; flex-direction: column; gap: 28px; padding: 32px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); }
+.login-card h1 { font-size: 24px; font-weight: 700; margin: 0 0 8px; }
+.login-card p { color: var(--muted-foreground); }
