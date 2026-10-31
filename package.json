@@ -10,7 +10,8 @@
     "api:dev": "tsx watch server/index.ts",
     "api:typecheck": "tsc -p server/tsconfig.json",
     "db:generate": "drizzle-kit generate --config server/drizzle.config.ts",
-    "api:bootstrap-admin": "tsx server/bootstrap-admin.ts"
+    "api:bootstrap-admin": "tsx server/bootstrap-admin.ts",
+    "db:migrate": "tsx server/migrate.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",

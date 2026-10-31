@@ -492,13 +492,19 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
     const [found] = await tx.select().from(attachments).where(and(eq(attachments.id, params.data.attachmentId), eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt))).for("update");
     if (!found) return null;
     if (actor.role !== "ADMIN" && found.uploaderId !== actor.id) return false;
+    try {
+      await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: found.storageKey }));
+    } catch {
+      request.log.error({ attachmentId: found.id }, "Не вдалося видалити файл зі сховища");
+      return "storage-error" as const;
+    }
     await tx.update(attachments).set({ deletedAt: new Date() }).where(eq(attachments.id, found.id));
     await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: found.id, action: "DELETE" });
     return found;
   });
   if (item === null) return reply.code(404).send({ error: "Файл не знайдено." });
   if (item === false) return reply.code(403).send({ error: "Можна видалити лише власний файл." });
-  await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: item.storageKey })).catch(() => request.log.error({ attachmentId: item.id }, "Не вдалося видалити файл зі сховища"));
+  if (item === "storage-error") return reply.code(503).send({ error: "Не вдалося видалити файл зі сховища. Спробуйте ще раз." });
   return { ok: true };
 });
 
