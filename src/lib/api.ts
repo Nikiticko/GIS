@@ -18,11 +18,11 @@ export interface ProjectDetail extends ProjectRow {
   vehicles: Pick<Vehicle, "id" | "name" | "registration">[];
 }
 export interface Attachment { id: string; projectId: string; uploaderId: string; name: string; contentType: string; size: number; createdAt: string }
-export interface Notification { id: string; type: string; projectId: string | null; subjectName: string | null; createdAt: string; readAt: string | null }
+export interface Notification { id: string; type: string; projectId: string | null; projectName: string | null; subjectName: string | null; createdAt: string; readAt: string | null }
 export interface AuditEntry { id: string; actorId: string; entityType: string; entityId: string; action: string; field: string | null; oldValue: string | null; newValue: string | null; createdAt: string }
 export interface Conflict { resourceId: string; resourceName: string; projectId: string; projectName: string; overlapStart: string; overlapEnd: string }
 export interface Conflicts { employees: Conflict[]; vehicles: Conflict[] }
-export interface Plan { start: string; end: string; employeeIds: string[]; responsibleId: string; vehicleIds: string[]; confirmConflicts: boolean }
+export interface Plan { start: string; end: string; employeeIds: string[]; responsibleId: string; vehicleIds: string[]; confirmConflicts: boolean; expectedUpdatedAt: string }
 export type ProjectValues = Pick<Project, "name" | "workTypeId" | "address" | "gps" | "volume" | "information" | "desiredStart" | "desiredEnd"> & { managerId?: string };
 
 export class ApiError extends Error {
@@ -64,7 +64,7 @@ export const api = {
   projects: (scope: "own" | "schedule" | "archive" = "own") => request<ProjectRow[]>(`/projects?scope=${scope}`),
   project: (id: string) => request<ProjectDetail>(`/projects/${id}`),
   createProject: (values: ProjectValues) => request<Project>("/projects", json("POST", values)),
-  updateProject: (id: string, values: Partial<ProjectValues>) => request<Project>(`/projects/${id}`, json("PATCH", values)),
+  updateProject: (id: string, values: Partial<ProjectValues> & { expectedUpdatedAt?: string }) => request<Project>(`/projects/${id}`, json("PATCH", values)),
   archiveProject: (id: string) => request<{ ok: boolean }>(`/projects/${id}/archive`, { method: "POST" }),
   savePlan: (id: string, plan: Plan) => request<{ ok: boolean; conflicts: Conflicts }>(`/projects/${id}/planning`, json("PUT", plan)),
   attachments: (id: string) => request<Attachment[]>(`/projects/${id}/attachments`),

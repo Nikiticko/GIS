@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { api, type AuditEntry, type Role, type User, type Vehicle, type WorkType } from "@/lib/api";
+import { api, type AuditEntry, type ProjectRow, type Role, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -14,7 +14,10 @@ export function ProductionUsers({ users, refresh }: { users: User[]; refresh: ()
   const [pending, setPending] = useState(false);
   async function act(work: () => Promise<unknown>) {
     setPending(true); setError("");
-    try { await work(); await refresh(); } catch (reason) { setError(message(reason)); } finally { setPending(false); }
+    try {
+      await work();
+      try { await refresh(); } catch { setError("Дію виконано, але дані на екрані не оновлено. Оновіть сторінку."); }
+    } catch (reason) { setError(message(reason)); } finally { setPending(false); }
   }
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -48,7 +51,7 @@ function UserCard({ user, pending, act }: { user: User; pending: boolean; act: (
 
 export function ProductionDirectories({ workTypes, vehicles, refresh }: { workTypes: WorkType[]; vehicles: Vehicle[]; refresh: () => Promise<void> }) {
   const [workType, setWorkType] = useState(""); const [name, setName] = useState(""); const [registration, setRegistration] = useState(""); const [error, setError] = useState(""); const [pending, setPending] = useState(false);
-  async function act(work: () => Promise<unknown>) { setPending(true); setError(""); try { await work(); await refresh(); } catch (reason) { setError(message(reason)); } finally { setPending(false); } }
+  async function act(work: () => Promise<unknown>) { setPending(true); setError(""); try { await work(); try { await refresh(); } catch { setError("Дію виконано, але дані на екрані не оновлено. Оновіть сторінку."); } } catch (reason) { setError(message(reason)); } finally { setPending(false); } }
   return <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">АДМІНІСТРУВАННЯ</p><h1>Довідники</h1></div></div>{error && <p className="form-error" role="alert">{error}</p>}
     <div className="production-panel form-stack"><h2>Типи робіт</h2><form className="production-actions" onSubmit={(event) => { event.preventDefault(); void act(async () => { await api.createWorkType(workType); setWorkType(""); }); }}><Input aria-label="Назва типу робіт" value={workType} onChange={(event) => setWorkType(event.target.value)} required /><Button type="submit" disabled={pending}>Додати</Button></form>{workTypes.map((type) => <div className="production-row" key={type.id}><span>{type.name} · {type.active ? "Активний" : "Неактивний"}</span><Button variant="outline" disabled={pending} onClick={() => void act(() => api.updateWorkType(type.id, !type.active))}>{type.active ? "Деактивувати" : "Активувати"}</Button></div>)}</div>
     <div className="production-panel form-stack"><h2>Автомобілі</h2><form className="form-stack" onSubmit={(event) => { event.preventDefault(); void act(async () => { await api.createVehicle(name, registration); setName(""); setRegistration(""); }); }}><label>Назва<Input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Державний номер<Input value={registration} onChange={(event) => setRegistration(event.target.value)} required /></label><Button type="submit" disabled={pending}>Додати автомобіль</Button></form>{vehicles.map((vehicle) => <VehicleCard key={vehicle.id} vehicle={vehicle} pending={pending} act={act} />)}</div>
@@ -58,6 +61,26 @@ function VehicleCard({ vehicle, pending, act }: { vehicle: Vehicle; pending: boo
   const [name, setName] = useState(vehicle.name); const [registration, setRegistration] = useState(vehicle.registration);
   return <div className="production-row"><Input aria-label="Назва автомобіля" value={name} onChange={(event) => setName(event.target.value)} /><Input aria-label="Державний номер" value={registration} onChange={(event) => setRegistration(event.target.value)} /><Button variant="outline" disabled={pending || !name.trim() || !registration.trim()} onClick={() => void act(() => api.updateVehicle(vehicle.id, { name, registration }))}>Зберегти</Button><Button variant="outline" disabled={pending} onClick={() => void act(() => api.updateVehicle(vehicle.id, { active: !vehicle.active }))}>{vehicle.active ? "Деактивувати" : "Активувати"}</Button></div>;
 }
-export function ProductionAudit({ entries, users }: { entries: AuditEntry[]; users: User[] }) {
-  return <section className="page-stack"><div className="page-heading"><h1>Журнал змін</h1></div><div className="production-list">{entries.map((entry) => <article className="production-panel" key={entry.id}><strong>{entry.action} · {entry.entityType}</strong><p>{users.find((user) => user.id === entry.actorId)?.name ?? "—"} · {new Date(entry.createdAt).toLocaleString("uk-UA")}</p>{entry.field && <p>{entry.field}: {entry.oldValue ?? "—"} → {entry.newValue ?? "—"}</p>}</article>)}{!entries.length && <p>Записів поки немає.</p>}</div></section>;
+const auditActions: Record<string, string> = { CREATE: "Створення", UPDATE: "Зміна", ARCHIVE: "Архівування", DELETE: "Видалення", REISSUE_KEY_CODE: "Перевипуск ключ-коду", REVOKE_SESSIONS: "Завершення сесій" };
+const auditEntities: Record<string, string> = { user: "Користувач", project: "Об’єкт", attachment: "Вкладення", "work-types": "Тип робіт", vehicles: "Автомобіль" };
+const auditFields: Record<string, string> = { name: "Назва / ПІБ", role: "Роль", phone: "Телефон", active: "Активність", foreman: "Бригадир", managerId: "Відповідальний менеджер", workTypeId: "Тип робіт", address: "Адреса", gps: "GPS-координати", volume: "Обсяг робіт", information: "Додаткова інформація", desiredStart: "Бажаний початок", desiredEnd: "Бажане завершення", plannedStart: "Плановий початок", plannedEnd: "Планове завершення", employees: "Команда", responsible: "Відповідальний", vehicles: "Автомобілі", registration: "Державний номер", archivedAt: "Час архівування" };
+export function ProductionAudit({ entries, users, projects, workTypes, vehicles }: { entries: AuditEntry[]; users: User[]; projects: ProjectRow[]; workTypes: WorkType[]; vehicles: Vehicle[] }) {
+  const names = new Map<string, string>();
+  for (const user of users) names.set(user.id, user.name);
+  for (const { project } of projects) names.set(project.id, project.name);
+  for (const workType of workTypes) names.set(workType.id, workType.name);
+  for (const vehicle of vehicles) names.set(vehicle.id, `${vehicle.name} · ${vehicle.registration}`);
+  function value(field: string | null, raw: string | null) {
+    if (raw === null || raw === "") return "—";
+    if (field === "role") return roles[raw as Role] ?? raw;
+    if (field === "active") return raw === "true" ? "Активний" : raw === "false" ? "Неактивний" : raw;
+    if (field === "foreman") return raw === "true" ? "Так" : raw === "false" ? "Ні" : raw;
+    if (field && ["managerId", "workTypeId", "employees", "responsible", "vehicles"].includes(field)) return raw.split(",").map((id) => names.get(id) ?? id).join(", ");
+    return raw;
+  }
+  return <section className="page-stack"><div className="page-heading"><h1>Журнал змін</h1></div><div className="production-list">{entries.map((entry) => <article className="production-panel" key={entry.id}>
+    <strong>{auditActions[entry.action] ?? entry.action} · {auditEntities[entry.entityType] ?? entry.entityType}{names.has(entry.entityId) ? `: ${names.get(entry.entityId)}` : ` · ${entry.entityId}`}</strong>
+    <p>{users.find((user) => user.id === entry.actorId)?.name ?? "—"} · {new Date(entry.createdAt).toLocaleString("uk-UA")}</p>
+    {entry.field && <p>{auditFields[entry.field] ?? entry.field}: {value(entry.field, entry.oldValue)} → {value(entry.field, entry.newValue)}</p>}
+  </article>)}{!entries.length && <p>Записів поки немає.</p>}</div></section>;
 }

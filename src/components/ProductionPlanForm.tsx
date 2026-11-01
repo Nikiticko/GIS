@@ -19,7 +19,7 @@ export function ProductionPlanForm({ detail, employees, vehicles, onSaved, onCan
   const toggle = (id: string, current: string[], setter: (next: string[]) => void) => { setter(current.includes(id) ? current.filter((value) => value !== id) : [...current, id]); clearWarning(); };
   async function save(confirmConflicts: boolean) {
     if (!start || !end || end < start || !selected.length || !selected.includes(responsible)) { setError("Вкажіть коректні дати, команду та відповідального з її складу."); return; }
-    const plan: Plan = { start, end, employeeIds: selected, responsibleId: responsible, vehicleIds: cars, confirmConflicts };
+    const plan: Plan = { start, end, employeeIds: selected, responsibleId: responsible, vehicleIds: cars, confirmConflicts, expectedUpdatedAt: detail.project.updatedAt };
     setSaving(true); setError("");
     try { await api.savePlan(detail.project.id, plan); onSaved(); }
     catch (reason) {

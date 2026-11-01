@@ -324,7 +324,7 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
     if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
     if (actor.role !== "ADMIN" && !(actor.role === "MANAGER" && project.managerId === actor.id)) return reply.code(403).send({ error: "Недостатньо прав." });
     const archivedAt = new Date();
-    await tx.update(projects).set({ archivedAt, updatedAt: archivedAt }).where(eq(projects.id, project.id));
+    await tx.update(projects).set({ archivedAt, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id));
     await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: project.id, action: "ARCHIVE", field: "archivedAt", newValue: archivedAt.toISOString() });
     if (actor.role === "MANAGER" && project.plannedStart) {
       const heads = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, "PRODUCTION_HEAD"), eq(users.active, true)));
@@ -336,7 +336,7 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
 
 const planningInput = z.object({
   start: dateValue, end: dateValue, employeeIds: z.array(z.string().uuid()).min(1), responsibleId: z.string().uuid(),
-  vehicleIds: z.array(z.string().uuid()), confirmConflicts: z.boolean().default(false),
+  vehicleIds: z.array(z.string().uuid()), confirmConflicts: z.boolean().default(false), expectedUpdatedAt: z.iso.datetime({ offset: true }).optional(),
 }).strict().refine((v) => v.start <= v.end && new Set(v.employeeIds).size === v.employeeIds.length && new Set(v.vehicleIds).size === v.vehicleIds.length && v.employeeIds.includes(v.responsibleId));
 
 app.put("/api/projects/:id/planning", async (request, reply) => {
@@ -352,6 +352,7 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gis_project_planning'))`);
     const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
     if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
+    if (plan.expectedUpdatedAt && new Date(plan.expectedUpdatedAt).getTime() !== project.updatedAt.getTime()) return reply.code(409).send({ error: "Об’єкт змінився. Оновіть дані перед збереженням." });
     const oldAssignments = await tx.select().from(assignments).where(eq(assignments.projectId, project.id));
     const oldVehicles = await tx.select().from(projectVehicles).where(eq(projectVehicles.projectId, project.id));
     const team = await tx.select().from(users).where(inArray(users.id, plan.employeeIds)).for("share");
@@ -364,7 +365,7 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     const intersect = <T extends { start: string | null; end: string | null }>(item: T) => ({ ...item, overlapStart: item.start && item.start > plan.start ? item.start : plan.start, overlapEnd: item.end && item.end < plan.end ? item.end : plan.end });
     const conflicts = { employees: employeeConflicts.map(intersect), vehicles: vehicleConflicts.map(intersect) };
     if (!plan.confirmConflicts && (employeeConflicts.length || vehicleConflicts.length)) return reply.code(409).send({ error: "Виявлено перетин призначень.", conflicts });
-    await tx.update(projects).set({ plannedStart: plan.start, plannedEnd: plan.end, updatedAt: new Date() }).where(eq(projects.id, project.id));
+    await tx.update(projects).set({ plannedStart: plan.start, plannedEnd: plan.end, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id));
     await tx.delete(assignments).where(eq(assignments.projectId, project.id));
     await tx.insert(assignments).values(plan.employeeIds.map((userId) => ({ projectId: project.id, userId, responsible: userId === plan.responsibleId })));
     await tx.delete(projectVehicles).where(eq(projectVehicles.projectId, project.id));
@@ -408,17 +409,19 @@ app.get("/api/projects/:id", async (request, reply) => {
 app.patch("/api/projects/:id", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
-  const params = uuidParam.safeParse(request.params), input = projectFields.partial().safeParse(request.body);
-  if (!params.success || !input.success || !Object.keys(input.data).length) return reply.code(400).send({ error: "Некоректні дані об’єкта." });
+  const params = uuidParam.safeParse(request.params), input = projectFields.partial().extend({ expectedUpdatedAt: z.iso.datetime({ offset: true }).optional() }).safeParse(request.body);
+  if (!params.success || !input.success || !Object.keys(input.data).some((key) => key !== "expectedUpdatedAt")) return reply.code(400).send({ error: "Некоректні дані об’єкта." });
+  const { expectedUpdatedAt, ...changes } = input.data;
   return db.transaction(async (tx) => {
     const sessionStatus = await sessionStillValid(tx, request.cookies[sessionCookie], actor);
     if (sessionStatus !== "ok") return reply.code(sessionStatus === "changed" ? 409 : 401).send({ error: sessionStatus === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
     const [old] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
     if (!old || old.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
     if (actor.role !== "ADMIN" && actor.role !== "PRODUCTION_HEAD" && !(actor.role === "MANAGER" && actor.id === old.managerId)) return reply.code(403).send({ error: "Недостатньо прав." });
-    if (input.data.managerId && input.data.managerId !== old.managerId && actor.role !== "ADMIN") return reply.code(403).send({ error: "Змінити менеджера може лише адміністратор." });
-    if (actor.role === "MANAGER" && old.plannedStart && ((input.data.workTypeId && input.data.workTypeId !== old.workTypeId) || (input.data.desiredStart !== undefined && input.data.desiredStart !== old.desiredStart) || (input.data.desiredEnd !== undefined && input.data.desiredEnd !== old.desiredEnd))) return reply.code(403).send({ error: "Ці дані змінює керівник виробництва." });
-    const next = { ...old, ...input.data };
+    if (expectedUpdatedAt && new Date(expectedUpdatedAt).getTime() !== old.updatedAt.getTime()) return reply.code(409).send({ error: "Об’єкт змінився. Оновіть дані перед збереженням." });
+    if (changes.managerId && changes.managerId !== old.managerId && actor.role !== "ADMIN") return reply.code(403).send({ error: "Змінити менеджера може лише адміністратор." });
+    if (actor.role === "MANAGER" && old.plannedStart && ((changes.workTypeId && changes.workTypeId !== old.workTypeId) || (changes.desiredStart !== undefined && changes.desiredStart !== old.desiredStart) || (changes.desiredEnd !== undefined && changes.desiredEnd !== old.desiredEnd))) return reply.code(403).send({ error: "Ці дані змінює керівник виробництва." });
+    const next = { ...old, ...changes };
     if (!validProject(next)) return reply.code(400).send({ error: "Вкажіть локацію та коректну пару бажаних дат." });
     if (next.managerId !== old.managerId) {
       const [manager] = await tx.select().from(users).where(eq(users.id, next.managerId)).for("share");
@@ -428,7 +431,7 @@ app.patch("/api/projects/:id", async (request, reply) => {
       const [workType] = await tx.select().from(workTypes).where(eq(workTypes.id, next.workTypeId)).for("share");
       if (!workType?.active) return reply.code(400).send({ error: "Оберіть активний тип робіт." });
     }
-    const [updated] = await tx.update(projects).set({ ...input.data, updatedAt: new Date() }).where(eq(projects.id, old.id)).returning();
+    const [updated] = await tx.update(projects).set({ ...changes, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, old.id)).returning();
     for (const field of ["name", "managerId", "workTypeId", "address", "gps", "volume", "information", "desiredStart", "desiredEnd"] as const) {
       if (old[field] !== updated[field]) await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: old.id, action: "UPDATE", field, oldValue: old[field], newValue: updated[field] });
     }
@@ -449,7 +452,10 @@ app.get("/api/employees", async (request, reply) => {
 app.get("/api/notifications", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
-  return db.select({ notification: notifications, subjectName: users.name }).from(notifications).leftJoin(users, eq(notifications.subjectUserId, users.id)).where(eq(notifications.userId, actor.id)).orderBy(sql`${notifications.createdAt} desc`).then((rows) => rows.map(({ notification, subjectName }) => ({ ...notification, subjectName })));
+  return db.select({ notification: notifications, subjectName: users.name, projectName: projects.name }).from(notifications)
+    .leftJoin(users, eq(notifications.subjectUserId, users.id)).leftJoin(projects, eq(notifications.projectId, projects.id))
+    .where(eq(notifications.userId, actor.id)).orderBy(sql`${notifications.createdAt} desc`)
+    .then((rows) => rows.map(({ notification, subjectName, projectName }) => ({ ...notification, subjectName, projectName })));
 });
 app.post("/api/notifications/:id/read", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
