@@ -605,7 +605,6 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
       if (!project || project.archivedAt || !(actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD" || (actor.role === "MANAGER" && project.managerId === actor.id))) throw new AttachmentAccessChanged();
       const [item] = await tx.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size }).returning();
       await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: item.id, action: "CREATE" });
-      await notifyProject(tx, actor, project, "changed", [{ field: "Вкладення", before: null, after: file.filename }]);
       return item;
     });
     return reply.code(201).send({ id: attachment.id, projectId: attachment.projectId, uploaderId: attachment.uploaderId, name: attachment.name, contentType: attachment.contentType, size: attachment.size, createdAt: attachment.createdAt });
@@ -657,7 +656,6 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
     if (actor.role !== "ADMIN" && found.uploaderId !== actor.id) return false;
     await tx.update(attachments).set({ deletedAt: new Date() }).where(eq(attachments.id, found.id));
     await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: found.id, action: "DELETE" });
-    await notifyProject(tx, actor, project, "changed", [{ field: "Вкладення", before: found.name, after: null }]);
     return found;
   });
   if (item === "changed" || item === "unauthorized") return reply.code(item === "changed" ? 409 : 401).send({ error: item === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
