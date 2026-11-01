@@ -59,18 +59,29 @@ app.post("/api/auth/login", async (request, reply) => {
   const current = attempt && attempt.until > now ? attempt : { count: 0, until: now + 15 * 60_000 };
   current.count++;
   attempts.set(request.ip, current);
+  function releaseAttempt() {
+    if (attempts.get(request.ip) !== current) return;
+    current.count--;
+    if (current.count === 0) attempts.delete(request.ip);
+  }
   const parsed = z.object({ code: z.string().regex(/^\d{6}$/) }).safeParse(request.body);
   const token = randomBytes(32).toString("hex");
-  const user = parsed.success ? await db.transaction(async (tx) => {
-    const [matched] = await tx.select().from(users).where(eq(users.keyCode, parsed.data.code)).for("update");
-    if (!matched?.active) return undefined;
-    await tx.insert(sessions).values({ id: token, userId: matched.id });
-    return matched;
-  }) : undefined;
+  let user;
+  try {
+    user = parsed.success ? await db.transaction(async (tx) => {
+      const [matched] = await tx.select().from(users).where(eq(users.keyCode, parsed.data.code)).for("update");
+      if (!matched?.active) return undefined;
+      await tx.insert(sessions).values({ id: token, userId: matched.id });
+      return matched;
+    }) : undefined;
+  } catch (error) {
+    releaseAttempt();
+    throw error;
+  }
   if (!user) {
     return reply.code(401).send({ error: "Невірний код або обліковий запис неактивний." });
   }
-  attempts.delete(request.ip);
+  releaseAttempt();
   reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: 60 * 60 * 24 * 365 });
   return { id: user.id, name: user.name, role: user.role };
 });

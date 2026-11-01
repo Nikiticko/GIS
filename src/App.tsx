@@ -42,7 +42,7 @@ export default function App() {
     setData({ projects, schedule, archive, employees, users, workTypes, vehicles, notifications, audit });
     setConnectionError("");
   }, []);
-  const reset = useCallback(() => { sessionIdentity.current = null; setUser(null); setData(initialData); setDetail(null); setModal(null); setScreen("projects"); }, []);
+  const reset = useCallback(() => { sessionIdentity.current = null; setUser(null); setData(initialData); setDetail(null); setModal(null); setScreen("projects"); setConnectionError(""); }, []);
   const loadSession = useCallback(async () => {
     try {
       const current = await api.me();
