@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { Archive, Bell, CalendarDays, ClipboardList, HardHat, LogOut, Plus, Settings, Shield, Users } from "lucide-react";
-import { api, ApiError, type Attachment, type AuditEntry, type CurrentUser, type Employee, type Notification, type ProjectDetail, type ProjectRow, type ProjectValues, type User, type Vehicle, type WorkType } from "@/lib/api";
+import { api, ApiError, type Attachment, type AuditEntry, type CurrentUser, type Employee, type Notification, type ProjectDetail, type ProjectRow, type ProjectValues, type ScheduleRow, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { LoginView } from "@/components/LoginView";
 import { ProductionProjectForm } from "@/components/ProductionProjectForm";
 import { ProductionPlanForm } from "@/components/ProductionPlanForm";
@@ -20,7 +20,7 @@ function screenFromPath(path: string): Screen | null {
 const statuses = { NEW: "Новий", PLANNED: "Запланований", IN_PROGRESS: "У роботі", COMPLETED: "Завершений" };
 const notificationLabels: Record<string, string> = { PROJECT_CREATED: "Створено новий об’єкт", PROJECT_LOCATION_CHANGED: "Змінено локацію об’єкта", PROJECT_ARCHIVED: "Об’єкт архівовано", EMPLOYEE_ASSIGNED: "Вас призначено на об’єкт", EMPLOYEE_REMOVED: "Вас знято з об’єкта", PROJECT_DATES_CHANGED: "Змінено дати об’єкта", EMPLOYEE_DEACTIVATED: "Працівника деактивовано" };
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Не вдалося виконати дію.";
-const initialData = { projects: [] as ProjectRow[], schedule: [] as ProjectRow[], archive: [] as ProjectRow[], employees: [] as Employee[], users: [] as User[], workTypes: [] as WorkType[], vehicles: [] as Vehicle[], notifications: [] as Notification[], audit: [] as AuditEntry[] };
+const initialData = { projects: [] as ProjectRow[], schedule: [] as ScheduleRow[], archive: [] as ProjectRow[], employees: [] as Employee[], users: [] as User[], workTypes: [] as WorkType[], vehicles: [] as Vehicle[], notifications: [] as Notification[], audit: [] as AuditEntry[] };
 type Data = typeof initialData;
 
 export default function App() {
@@ -39,7 +39,7 @@ export default function App() {
   const refresh = useCallback(async (current: CurrentUser) => {
     const admin = current.role === "ADMIN", head = current.role === "PRODUCTION_HEAD", employee = current.role === "PRODUCTION_EMPLOYEE";
     const [projects, schedule, archive, employees, users, workTypes, vehicles, notifications, audit] = await Promise.all([
-      api.projects(), api.projects("schedule"), employee ? Promise.resolve([]) : api.projects("archive"),
+      api.projects(), api.schedule(), employee ? Promise.resolve([]) : api.projects("archive"),
       admin || head ? api.employees() : Promise.resolve([]), admin ? api.users() : Promise.resolve([]),
       employee ? Promise.resolve([]) : api.workTypes(), admin || head ? api.vehicles() : Promise.resolve([]),
       api.notifications(), admin ? api.audit() : Promise.resolve([]),

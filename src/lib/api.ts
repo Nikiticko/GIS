@@ -12,6 +12,7 @@ export interface Project {
   archivedAt: string | null; createdAt: string; updatedAt: string;
 }
 export interface ProjectRow { project: Project; workTypeName: string; status: Status }
+export interface ScheduleRow extends ProjectRow { managerName: string; team: string[]; vehicles: string[] }
 export interface ProjectDetail extends ProjectRow {
   managerName: string;
   team: { id: string; name: string; phone: string | null; responsible: boolean }[];
@@ -64,6 +65,7 @@ export const api = {
   createVehicle: (name: string, registration: string) => request<Vehicle>("/vehicles", json("POST", { name, registration })),
   updateVehicle: (id: string, values: Partial<Pick<Vehicle, "name" | "registration" | "active">> & { expected?: Pick<Vehicle, "name" | "registration" | "active"> }) => request<Vehicle>(`/vehicles/${id}`, json("PATCH", values)),
   projects: (scope: "own" | "schedule" | "archive" = "own") => request<ProjectRow[]>(`/projects?scope=${scope}`),
+  schedule: () => request<ScheduleRow[]>("/projects?scope=schedule"),
   project: (id: string) => request<ProjectDetail>(`/projects/${id}`),
   createProject: (values: ProjectValues) => request<Project>("/projects", json("POST", values)),
   updateProject: (id: string, values: Partial<ProjectValues> & { expectedUpdatedAt?: string }) => request<Project>(`/projects/${id}`, json("PATCH", values)),

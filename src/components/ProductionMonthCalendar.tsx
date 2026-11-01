@@ -2,12 +2,12 @@ import { useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { addDays, localDate } from "@/lib/project-utils";
-import type { ProjectRow, Status } from "@/lib/api";
+import type { ScheduleRow, Status } from "@/lib/api";
 
 const statusLabels: Record<Status, string> = { NEW: "Новий", PLANNED: "Запланований", IN_PROGRESS: "У роботі", COMPLETED: "Завершений" };
 const weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 
-type CalendarEvent = { row: ProjectRow; start: string; end: string };
+type CalendarEvent = { row: ScheduleRow; start: string; end: string };
 type WeekEvent = CalendarEvent & { first: number; last: number; lane: number };
 
 function eventsForWeek(events: CalendarEvent[], days: string[]) {
@@ -25,7 +25,7 @@ function eventsForWeek(events: CalendarEvent[], days: string[]) {
   return { events: placed, laneCount: laneEnds.length };
 }
 
-export function ProductionMonthCalendar({ rows, employee, onOpen }: { rows: ProjectRow[]; employee: boolean; onOpen: (id: string) => void }) {
+export function ProductionMonthCalendar({ rows, employee, onOpen }: { rows: ScheduleRow[]; employee: boolean; onOpen: (id: string) => void }) {
   const [month, setMonth] = useState(() => { const now = new Date(); return new Date(now.getFullYear(), now.getMonth(), 1); });
   const today = localDate();
   const weeks = useMemo(() => {
@@ -51,10 +51,10 @@ export function ProductionMonthCalendar({ rows, employee, onOpen }: { rows: Proj
     </div>
     <div className="production-month-scroll"><div className="production-month" role="region" aria-label={`Графік за ${label}`}>
       <div className="production-month-weekdays">{weekdays.map((day) => <div key={day}>{day}</div>)}</div>
-      {weeks.map(({ days, events, laneCount }) => <div className="production-month-week" key={days[0]} style={{ gridTemplateRows: `34px ${laneCount ? `repeat(${laneCount}, minmax(26px, 1fr))` : "1fr"}` }}>
+      {weeks.map(({ days, events, laneCount }) => <div className="production-month-week" key={days[0]} style={{ gridTemplateRows: `34px ${laneCount ? `repeat(${laneCount}, minmax(min-content, 1fr))` : "1fr"}` }}>
         {days.map((day, index) => <div className={`production-month-cell ${day.startsWith(monthPrefix) ? "" : "outside-month"} ${day === today ? "today" : ""}`} aria-label={day} key={day} style={{ gridColumn: index + 1 }} />)}
         {days.map((day, index) => <span className={`production-month-day ${day.startsWith(monthPrefix) ? "" : "outside-month"} ${day === today ? "today" : ""}`} aria-hidden="true" key={day} style={{ gridColumn: index + 1 }}>{Number(day.slice(-2))}</span>)}
-        {events.map((event) => <button key={event.row.project.id} type="button" className={`production-month-event status-${event.row.status.toLowerCase().replace("_", "-")} ${event.start < days[0] ? "continues-before" : ""} ${event.end > days[6] ? "continues-after" : ""}`} style={{ gridColumn: `${event.first + 1} / ${event.last + 2}`, gridRow: event.lane + 2 }} title={`${event.row.project.name} · ${statusLabels[event.row.status]} · ${event.start} — ${event.end}`} aria-label={`${event.row.project.name} · ${statusLabels[event.row.status]} · ${event.start} — ${event.end}`} onClick={() => onOpen(event.row.project.id)}><span>{event.row.project.name}</span></button>)}
+        {events.map((event) => <button key={event.row.project.id} type="button" className={`production-month-event status-${event.row.status.toLowerCase().replace("_", "-")} ${event.start < days[0] ? "continues-before" : ""} ${event.end > days[6] ? "continues-after" : ""}`} style={{ gridColumn: `${event.first + 1} / ${event.last + 2}`, gridRow: event.lane + 2 }} title={`${event.row.project.name} · ${statusLabels[event.row.status]} · ${event.start} — ${event.end}`} onClick={() => onOpen(event.row.project.id)}><span><strong>{event.row.project.name}</strong><span>Менеджер: {event.row.managerName}</span><span>Тип робіт: {event.row.workTypeName}</span><span>Обсяг: {event.row.project.volume || "Не вказано"}</span>{event.row.status !== "NEW" && <><span>Бригада: {event.row.team.join(", ") || "Не призначена"}</span><span>Автомобілі: {event.row.vehicles.join(", ") || "Не призначені"}</span></>}</span></button>)}
       </div>)}
     </div></div>
     <div className="production-month-legend" aria-label="Кольори статусів">{(Object.keys(statusLabels) as Status[]).map((status) => <span key={status}><i className={`status-${status.toLowerCase().replace("_", "-")}`} />{statusLabels[status]}</span>)}</div>
