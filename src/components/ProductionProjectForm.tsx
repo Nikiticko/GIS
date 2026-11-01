@@ -20,7 +20,8 @@ export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, i
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!values.address.trim() && !values.gps.trim()) { setError("Вкажіть адресу або GPS-координати."); return; }
-    if (Boolean(values.desiredStart) !== Boolean(values.desiredEnd) || (values.desiredStart && values.desiredEnd < values.desiredStart)) { setError("Вкажіть обидві бажані дати в правильному порядку або залиште їх порожніми."); return; }
+    if ((!initial || initial.desiredStart || initial.desiredEnd) && (!values.desiredStart || !values.desiredEnd)) { setError("Вкажіть обидві бажані дати."); return; }
+    if (Boolean(values.desiredStart) !== Boolean(values.desiredEnd) || (values.desiredStart && values.desiredEnd < values.desiredStart)) { setError("Вкажіть обидві бажані дати в правильному порядку."); return; }
     setSaving(true); setError("");
     try {
       await onSave({ name: values.name.trim(), workTypeId: values.workTypeId, ...(isAdmin ? { managerId: values.managerId } : {}), address: values.address.trim() || null, gps: values.gps.trim() || null, volume: values.volume.trim() || null, information: values.information.trim() || null, desiredStart: values.desiredStart || null, desiredEnd: values.desiredEnd || null });
@@ -35,7 +36,7 @@ export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, i
     <div className="field"><Label htmlFor="project-address">Адреса</Label><Input id="project-address" value={values.address} onChange={(event) => change("address", event.target.value)} /></div>
     <div className="field"><Label htmlFor="project-gps">GPS-координати</Label><Input id="project-gps" value={values.gps} onChange={(event) => change("gps", event.target.value)} /></div>
     <div className="field"><Label htmlFor="project-volume">Обсяг робіт</Label><Input id="project-volume" value={values.volume} onChange={(event) => change("volume", event.target.value)} /></div>
-    <div className="planning-dates"><div className="field"><Label htmlFor="desired-start">Бажаний початок</Label><Input id="desired-start" type="date" disabled={restricted} value={values.desiredStart} onChange={(event) => change("desiredStart", event.target.value)} /></div><span className="date-arrow">—</span><div className="field"><Label htmlFor="desired-end">Бажане завершення</Label><Input id="desired-end" type="date" disabled={restricted} value={values.desiredEnd} onChange={(event) => change("desiredEnd", event.target.value)} /></div></div>
+    <div className="planning-dates"><div className="field"><Label htmlFor="desired-start">Бажаний початок</Label><Input id="desired-start" type="date" required={!initial || Boolean(initial.desiredStart)} disabled={restricted} value={values.desiredStart} onChange={(event) => change("desiredStart", event.target.value)} /></div><span className="date-arrow">—</span><div className="field"><Label htmlFor="desired-end">Бажане завершення</Label><Input id="desired-end" type="date" required={!initial || Boolean(initial.desiredEnd)} disabled={restricted} value={values.desiredEnd} onChange={(event) => change("desiredEnd", event.target.value)} /></div></div>
     <div className="field"><Label htmlFor="project-info">Додаткова інформація</Label><Textarea id="project-info" value={values.information} onChange={(event) => change("information", event.target.value)} rows={3} /></div>
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="modal-footer"><Button type="button" variant="outline" onClick={onCancel} disabled={saving}>Скасувати</Button><Button type="submit" className="primary-shadcn" disabled={saving}>{saving ? "Зберігаємо…" : (initial ? "Зберегти зміни" : "Створити об’єкт")}</Button></div>

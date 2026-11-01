@@ -8,7 +8,7 @@ import { ProductionAudit, ProductionDirectories, ProductionUsers } from "@/compo
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { addDays, localDate } from "@/lib/project-utils";
+import { ProductionMonthCalendar } from "@/components/ProductionMonthCalendar";
 
 type Screen = "projects" | "schedule" | "archive" | "employees" | "users" | "directories" | "audit" | "notifications";
 const statuses = { NEW: "Новий", PLANNED: "Запланований", IN_PROGRESS: "У роботі", COMPLETED: "Завершений" };
@@ -28,7 +28,6 @@ export default function App() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [modal, setModal] = useState<"create" | "detail" | "edit" | "plan" | null>(null);
   const [busy, setBusy] = useState(false);
-  const [week, setWeek] = useState(() => localDate());
 
   const refresh = useCallback(async (current: CurrentUser) => {
     const admin = current.role === "ADMIN", head = current.role === "PRODUCTION_HEAD", employee = current.role === "PRODUCTION_EMPLOYEE";
@@ -111,7 +110,7 @@ export default function App() {
       <main className="main-content"><div className="content-inner">
         {connectionError && <div className="connection-alert" role="alert">{connectionError} <button onClick={() => void loadSession()}>Повторити</button></div>}
         {(effectiveScreen === "projects" || effectiveScreen === "archive") && <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{effectiveScreen === "archive" ? "Архів об’єктів" : manager || employee ? "Мої об’єкти" : "Об’єкти"}</h1></div>{effectiveScreen === "projects" && canCreate && <Button onClick={() => setModal("create")}><Plus data-icon="inline-start" />Новий об’єкт</Button>}</div><ProjectList rows={currentRows} open={openProject} /></section>}
-        {effectiveScreen === "schedule" && <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{employee ? "Мій графік" : "Графік"}</h1></div><label>Початок тижня <Input type="date" value={week} onChange={(event) => setWeek(event.target.value)} /></label></div><Schedule rows={data.schedule} date={week} open={openProject} /></section>}
+        {effectiveScreen === "schedule" && <ProductionMonthCalendar rows={data.schedule} employee={employee} onOpen={(id) => void openProject(id)} />}
         {effectiveScreen === "employees" && <section className="page-stack"><div className="page-heading"><h1>Працівники виробництва</h1></div><div className="production-list">{data.employees.map((person) => <div className="production-panel" key={person.id}><strong>{person.name}</strong><p>{person.phone || "Телефон не вказано"} · {person.active ? "Активний" : "Неактивний"}{person.foreman ? " · Бригадир" : ""}</p></div>)}</div></section>}
         {effectiveScreen === "users" && admin && <ProductionUsers users={data.users} refresh={reload} />}
         {effectiveScreen === "directories" && admin && <ProductionDirectories workTypes={data.workTypes} vehicles={data.vehicles} refresh={reload} />}
@@ -136,9 +135,4 @@ export default function App() {
 function period(start: string | null, end: string | null) { return start && end ? `${start} — ${end}` : "Не вказано"; }
 function ProjectList({ rows, open }: { rows: ProjectRow[]; open: (id: string) => Promise<void> }) {
   return <div className="production-list">{rows.map(({ project, status, workTypeName }) => <button className="production-panel production-project" key={project.id} onClick={() => void open(project.id)}><strong>{project.name}</strong><span>{statuses[status]} · {workTypeName}</span><span>{project.address || project.gps} · {period(project.plannedStart, project.plannedEnd)}</span></button>)}{!rows.length && <div className="empty-state">Об’єктів немає.</div>}</div>;
-}
-function Schedule({ rows, date, open }: { rows: ProjectRow[]; date: string; open: (id: string) => Promise<void> }) {
-  const base = date ? new Date(`${date}T12:00:00`) : new Date();
-  const monday = new Date(base); monday.setDate(base.getDate() - (base.getDay() + 6) % 7);
-  return <div className="production-calendar">{Array.from({ length: 7 }, (_, index) => { const day = addDays(index, monday); const dayRows = rows.filter(({ project }) => project.plannedStart && project.plannedEnd && project.plannedStart <= day && project.plannedEnd >= day); return <div className="production-day" key={day}><strong>{new Date(`${day}T12:00:00`).toLocaleDateString("uk-UA", { weekday: "short", day: "numeric", month: "short" })}</strong>{dayRows.map(({ project }) => <button key={project.id} onClick={() => void open(project.id)}>{project.name}</button>)}{!dayRows.length && <span>—</span>}</div>; })}</div>;
 }

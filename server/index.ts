@@ -296,7 +296,7 @@ const projectFields = z.object({
   desiredStart: dateValue.nullable().optional(), desiredEnd: dateValue.nullable().optional(),
 }).strict();
 const validProject = (value: { address?: string | null; gps?: string | null; desiredStart?: string | null; desiredEnd?: string | null }) => Boolean(value.address || value.gps) && ((!value.desiredStart && !value.desiredEnd) || Boolean(value.desiredStart && value.desiredEnd && value.desiredStart <= value.desiredEnd));
-const projectInput = projectFields.refine(validProject);
+const projectInput = projectFields.refine((value) => validProject(value) && Boolean(value.desiredStart && value.desiredEnd));
 const statusSql = sql<string>`case when ${projects.plannedStart} is null then 'NEW' when ${projects.plannedStart} > current_date then 'PLANNED' when ${projects.plannedEnd} >= current_date then 'IN_PROGRESS' else 'COMPLETED' end`;
 
 app.post("/api/projects", async (request, reply) => {
@@ -330,7 +330,7 @@ app.get("/api/projects", async (request, reply) => {
   const conditions = [];
   conditions.push(scope === "archive" ? sql`${projects.archivedAt} is not null` : isNull(projects.archivedAt));
   if (actor.role === "MANAGER" && scope !== "schedule") conditions.push(eq(projects.managerId, actor.id));
-  if (scope === "schedule") conditions.push(sql`${projects.plannedStart} is not null`);
+  if (scope === "schedule") conditions.push(sql`(${projects.plannedStart} is not null or ${projects.desiredStart} is not null)`);
   if (actor.role === "PRODUCTION_EMPLOYEE") conditions.push(sql`exists (select 1 from ${assignments} where ${assignments.projectId} = ${projects.id} and ${assignments.userId} = ${actor.id})`);
   return db.select({ project: projects, workTypeName: workTypes.name, status: statusSql }).from(projects)
     .innerJoin(workTypes, eq(projects.workTypeId, workTypes.id)).where(and(...conditions));
@@ -422,7 +422,7 @@ app.get("/api/projects/:id", async (request, reply) => {
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   const [row] = await db.select({ project: projects, workTypeName: workTypes.name, status: statusSql }).from(projects).innerJoin(workTypes, eq(projects.workTypeId, workTypes.id)).where(eq(projects.id, params.data.id));
   if (!row) return reply.code(404).send({ error: "Об’єкт не знайдено." });
-  if (actor.role === "MANAGER" && row.project.managerId !== actor.id && (!row.project.plannedStart || row.project.archivedAt)) return reply.code(403).send({ error: "Недостатньо прав." });
+  if (actor.role === "MANAGER" && row.project.managerId !== actor.id && ((!row.project.plannedStart && !row.project.desiredStart) || row.project.archivedAt)) return reply.code(403).send({ error: "Недостатньо прав." });
   const team = await db.select({ id: users.id, name: users.name, phone: users.phone, responsible: assignments.responsible }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, row.project.id));
   if (actor.role === "PRODUCTION_EMPLOYEE" && (row.project.archivedAt || !team.some((person) => person.id === actor.id))) return reply.code(403).send({ error: "Недостатньо прав." });
   const cars = await db.select({ id: vehicles.id, name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, row.project.id));
@@ -447,6 +447,7 @@ app.patch("/api/projects/:id", async (request, reply) => {
     if (actor.role === "MANAGER" && old.plannedStart && ((changes.workTypeId && changes.workTypeId !== old.workTypeId) || (changes.desiredStart !== undefined && changes.desiredStart !== old.desiredStart) || (changes.desiredEnd !== undefined && changes.desiredEnd !== old.desiredEnd))) return reply.code(403).send({ error: "Ці дані змінює керівник виробництва." });
     const next = { ...old, ...changes };
     if (!validProject(next)) return reply.code(400).send({ error: "Вкажіть локацію та коректну пару бажаних дат." });
+    if ((changes.desiredStart !== undefined || changes.desiredEnd !== undefined) && (!next.desiredStart || !next.desiredEnd)) return reply.code(400).send({ error: "Бажані дати початку та завершення обов’язкові." });
     if (next.managerId !== old.managerId) {
       const [manager] = await tx.select().from(users).where(eq(users.id, next.managerId)).for("share");
       if (!manager?.active || manager.role !== "MANAGER") return reply.code(400).send({ error: "Оберіть активного менеджера." });
@@ -505,7 +506,7 @@ async function attachmentAccess(projectId: string, actor: NonNullable<Awaited<Re
   if (!project) return false;
   if (edit) return !project.archivedAt && (actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD" || (actor.role === "MANAGER" && project.managerId === actor.id));
   if (actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD") return true;
-  if (actor.role === "MANAGER") return project.managerId === actor.id || Boolean(project.plannedStart && !project.archivedAt);
+  if (actor.role === "MANAGER") return project.managerId === actor.id || Boolean((project.plannedStart || project.desiredStart) && !project.archivedAt);
   if (actor.role === "PRODUCTION_EMPLOYEE" && !project.archivedAt) {
     const [assignment] = await db.select({ id: assignments.id }).from(assignments).where(and(eq(assignments.projectId, project.id), eq(assignments.userId, actor.id)));
     return Boolean(assignment);
