@@ -330,6 +330,28 @@ button:disabled { cursor: not-allowed; }
 .modal-footer { margin: 4px -22px -22px; padding: 13px 22px; }
 .modal-footer button { min-height: 36px; border-radius: 7px; font-size: 10px; }
 .form-error { margin: 0; color: #b74343; font-size: 10px; }
+.attachments-section { display: flex; flex-direction: column; gap: 10px; padding: 13px; border: 1px solid #e2e9ef; border-radius: 10px; background: #fbfcfd; }
+.attachments-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.attachments-heading > div { display: flex; flex-direction: column; gap: 2px; }
+.attachments-heading strong { color: #324b62; font-size: 11px; }
+.attachments-heading span { color: #8a9aa8; font-size: 9px; }
+.attachments-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.attachments-list { display: flex; flex-direction: column; gap: 7px; }
+.attachment-item { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px; border: 1px solid #e5ebf0; border-radius: 8px; background: #fff; }
+.attachment-icon { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 7px; color: #60798f; background: #edf3f7; }
+.attachment-icon svg { width: 16px; height: 16px; }
+.attachment-info { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.attachment-info strong { overflow: hidden; color: #344d63; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-info span { color: #8a99a6; font-size: 9px; }
+.attachment-actions { display: flex; gap: 5px; }
+.attachments-empty { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 58px; border: 1px dashed #d8e2e9; border-radius: 8px; color: #8b9aa7; font-size: 9px; }
+.attachments-empty svg { width: 15px; height: 15px; }
+.pending-files { display: flex; align-items: flex-start; flex-direction: column; gap: 7px; padding: 9px; border: 1px dashed #d8e2e9; border-radius: 8px; background: #fbfcfd; }
+.pending-files > span { color: #8b9aa7; font-size: 9px; }
+.pending-files-list { width: 100%; display: flex; flex-direction: column; gap: 5px; }
+.pending-files-list > div { display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; gap: 6px; color: #667c8f; }
+.pending-files-list > div > svg { width: 13px; height: 13px; }
+.pending-files-list span { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .planning-modal { max-width: 650px; }
 .planning-modal [data-slot="dialog-header"] { gap: 6px; }
 .planning-modal .eyebrow { margin-bottom: 0; }
@@ -457,6 +479,10 @@ button:disabled { cursor: not-allowed; }
   .planning-dates { gap: 7px; }
   .planning-dates .field { min-width: 0; }
   .planning-dates input { min-width: 0; padding-right: 5px; font-size: 9px; }
+  .attachments-heading { align-items: stretch; flex-direction: column; }
+  .attachments-heading button { align-self: flex-start; }
+  .attachment-item { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 7px; }
+  .attachment-icon { width: 30px; height: 30px; }
   .availability-groups { grid-template-columns: 1fr; max-height: 35vh; }
   .availability-heading { align-items: flex-end; }
   .availability-heading > span { font-size: 8px; }

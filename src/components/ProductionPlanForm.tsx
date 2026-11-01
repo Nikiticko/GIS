@@ -1,11 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type Availability, type Conflicts, type Employee, type Plan, type ProjectDetail, type Vehicle } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DateInput } from "@/components/ui/date-input";
 import { formatDate } from "@/lib/date";
+import { FileSelection } from "@/components/FileSelection";
 
 export function ProductionPlanForm({ detail, employees, vehicles, onSaved, onCancel }: { detail: ProjectDetail; employees: Employee[]; vehicles: Vehicle[]; onSaved: (files: File[]) => Promise<void>; onCancel: () => void }) {
   const availableEmployees = [...employees, ...detail.team.filter((person) => !employees.some((employee) => employee.id === person.id)).map((person) => ({ ...person, active: false, foreman: false }))];
@@ -50,7 +50,7 @@ export function ProductionPlanForm({ detail, employees, vehicles, onSaved, onCan
     <div className="field"><Label htmlFor="plan-responsible">Відповідальний</Label><select id="plan-responsible" className="form-select" value={responsible} onChange={(event) => { setResponsible(event.target.value); clearWarning(); }} required><option value="">Оберіть учасника команди</option>{availableEmployees.filter((person) => selected.includes(person.id)).map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></div>
     <fieldset className="field"><legend>Автомобілі (необов’язково)</legend>{availableVehicles.filter((vehicle) => vehicle.active || cars.includes(vehicle.id)).map((vehicle) => <label key={vehicle.id}><input type="checkbox" checked={cars.includes(vehicle.id)} onChange={() => toggle(vehicle.id, cars, setCars)} /> {vehicle.name} · {vehicle.registration}{!vehicle.active ? " · неактивний" : ""}{availability?.vehicles.filter((item) => item.resourceId === vehicle.id).map((item) => <span className="resource-busy" key={item.projectId}>Зайнятий: {item.projectName}, {formatDate(item.start)} — {formatDate(item.end)}</span>)}</label>)}</fieldset>
     <div className="field"><Label htmlFor="plan-information">Коментар (необов’язково)</Label><Textarea id="plan-information" value={information} onChange={(event) => setInformation(event.target.value)} rows={3} /></div>
-    <div className="field"><Label htmlFor="plan-files">Вкладення (необов’язково)</Label><Input id="plan-files" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} /></div>
+    <div className="field"><Label htmlFor="plan-files">Вкладення (необов’язково)</Label><FileSelection id="plan-files" files={files} disabled={saving} onChange={setFiles} /></div>
     {conflicts && <div className="overlap-warning" role="alert"><div><strong>Виявлено перетин призначень</strong>{[...conflicts.employees, ...conflicts.vehicles].map((conflict, index) => <p key={`${conflict.resourceId}-${conflict.projectId}-${index}`}>{conflict.resourceName}: {conflict.projectName}, {formatDate(conflict.overlapStart)} — {formatDate(conflict.overlapEnd)}</p>)}<p>Ви можете зберегти план попри попередження.</p></div></div>}
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="modal-footer"><Button type="button" variant="outline" onClick={onCancel} disabled={saving}>Скасувати</Button>{conflicts ? <Button type="button" className="primary-shadcn" disabled={saving} onClick={() => void save(true)}>Зберегти попри перетин</Button> : <Button type="submit" className="primary-shadcn" disabled={saving}>{saving ? "Зберігаємо…" : "Зберегти план"}</Button>}</div>

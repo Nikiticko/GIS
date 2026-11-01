@@ -579,7 +579,7 @@ app.get("/api/projects/:id/attachments", async (request, reply) => {
   const params = uuidParam.safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   if (!await attachmentAccess(params.data.id, actor, false)) return reply.code(403).send({ error: "Недостатньо прав." });
-  return db.select({ id: attachments.id, projectId: attachments.projectId, uploaderId: attachments.uploaderId, name: attachments.name, contentType: attachments.contentType, size: attachments.size, createdAt: attachments.createdAt }).from(attachments).where(and(eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt)));
+  return db.select({ id: attachments.id, projectId: attachments.projectId, uploaderId: attachments.uploaderId, name: attachments.name, contentType: attachments.contentType, size: attachments.size, createdAt: attachments.createdAt }).from(attachments).where(and(eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt))).orderBy(sql`${attachments.createdAt} desc`, sql`${attachments.id} desc`);
 });
 app.post("/api/projects/:id/attachments", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);

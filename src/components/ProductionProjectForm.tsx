@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DateInput } from "@/components/ui/date-input";
+import { FileSelection } from "@/components/FileSelection";
 
 type Values = { name: string; managerId: string; workTypeId: string; address: string; locationUrl: string; volume: string; information: string; desiredStart: string; desiredEnd: string };
 const empty: Values = { name: "", managerId: "", workTypeId: "", address: "", locationUrl: "", volume: "", information: "", desiredStart: "", desiredEnd: "" };
@@ -41,7 +42,7 @@ export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, i
     <div className="field"><Label htmlFor="project-volume">Обсяг робіт</Label><Input id="project-volume" required={!initial || Boolean(initial.volume)} value={values.volume} onChange={(event) => change("volume", event.target.value)} /></div>
     <div className="planning-dates"><div className="field"><Label htmlFor="desired-start">Бажаний початок</Label><DateInput id="desired-start" required={!initial || Boolean(initial.desiredStart)} disabled={restricted} value={values.desiredStart} onValueChange={(value) => change("desiredStart", value)} /></div><span className="date-arrow">—</span><div className="field"><Label htmlFor="desired-end">Бажане завершення</Label><DateInput id="desired-end" required={!initial || Boolean(initial.desiredEnd)} disabled={restricted} value={values.desiredEnd} onValueChange={(value) => change("desiredEnd", value)} /></div></div>
     <div className="field"><Label htmlFor="project-info">Коментар (необов’язково)</Label><Textarea id="project-info" value={values.information} onChange={(event) => change("information", event.target.value)} rows={3} /></div>
-    {!initial && <div className="field"><Label htmlFor="project-files">Вкладення (необов’язково)</Label><Input id="project-files" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} /></div>}
+    {!initial && <div className="field"><Label htmlFor="project-files">Вкладення (необов’язково)</Label><FileSelection id="project-files" files={files} disabled={saving} onChange={setFiles} /></div>}
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="modal-footer"><Button type="button" variant="outline" onClick={onCancel} disabled={saving}>Скасувати</Button><Button type="submit" className="primary-shadcn" disabled={saving}>{saving ? "Зберігаємо…" : (initial ? "Зберегти зміни" : "Створити об’єкт")}</Button></div>
   </form>;
