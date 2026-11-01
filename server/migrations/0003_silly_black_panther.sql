@@ -1,0 +1,3 @@
+ALTER TABLE "notifications" ADD COLUMN "payload" jsonb;
+--> statement-breakpoint
+DELETE FROM "notifications" WHERE "type" IN ('PROJECT_LOCATION_CHANGED', 'EMPLOYEE_ASSIGNED', 'EMPLOYEE_REMOVED', 'PROJECT_DATES_CHANGED', 'EMPLOYEE_DEACTIVATED');

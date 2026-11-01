@@ -12,7 +12,7 @@ import { and, eq, gt, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
-import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, users, vehicles, workTypes } from "./schema.js";
+import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
 mkdirSync(dirname(logFile), { recursive: true, mode: 0o700 });
@@ -126,6 +126,44 @@ async function currentUser(token: string | undefined) {
 }
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type NotificationChange = NonNullable<NotificationPayload["changes"]>[number];
+const notificationFields: Record<string, string> = { name: "Назва", managerId: "Менеджер", workTypeId: "Тип робіт", address: "Адреса", gps: "GPS", volume: "Обсяг робіт", information: "Коментар", desiredStart: "Бажаний початок", desiredEnd: "Бажане завершення", plannedStart: "Плановий початок", plannedEnd: "Планове завершення", employees: "Бригада", responsible: "Відповідальний", vehicles: "Автомобілі" };
+async function describeChanges(tx: Transaction, changes: { field: string; before: string | null; after: string | null }[]): Promise<NotificationChange[]> {
+  const userIds = new Set<string>(), vehicleIds = new Set<string>(), typeIds = new Set<string>();
+  for (const change of changes) {
+    const target = ["managerId", "employees", "responsible"].includes(change.field) ? userIds : change.field === "vehicles" ? vehicleIds : change.field === "workTypeId" ? typeIds : null;
+    if (target) for (const value of [change.before, change.after]) for (const id of (value ?? "").split(",")) if (id) target.add(id);
+  }
+  const [people, cars, types] = await Promise.all([
+    userIds.size ? tx.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, [...userIds])) : [],
+    vehicleIds.size ? tx.select({ id: vehicles.id, name: vehicles.name, registration: vehicles.registration }).from(vehicles).where(inArray(vehicles.id, [...vehicleIds])) : [],
+    typeIds.size ? tx.select({ id: workTypes.id, name: workTypes.name }).from(workTypes).where(inArray(workTypes.id, [...typeIds])) : [],
+  ]);
+  const names = new Map([...people.map((person) => [person.id, person.name] as const), ...cars.map((car) => [car.id, `${car.name} (${car.registration})`] as const), ...types.map((type) => [type.id, type.name] as const)]);
+  return changes.map(({ field, before, after }) => {
+    const translate = (value: string | null) => value && ["managerId", "workTypeId", "employees", "responsible", "vehicles"].includes(field) ? value.split(",").map((id) => names.get(id) ?? id).join(", ") : value;
+    return { field: notificationFields[field] ?? field, before: translate(before), after: translate(after) };
+  });
+}
+async function notifyProject(tx: Transaction, actor: { id: string; name: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = [], previousWorkers: string[] = []) {
+  if (actor.role === "ADMIN") return;
+  const planned = Boolean(project.plannedStart);
+  if (actor.role === "PRODUCTION_HEAD" && event === "changed" && !planned) return;
+  const assigned = await tx.select({ id: users.id, name: users.name }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, project.id));
+  const heads = actor.role === "MANAGER" ? await tx.select({ id: users.id }).from(users).where(and(eq(users.role, "PRODUCTION_HEAD"), eq(users.active, true))) : [];
+  const recipients = new Set<string>();
+  if (actor.role === "MANAGER") for (const head of heads) recipients.add(head.id);
+  if (actor.role === "PRODUCTION_HEAD") recipients.add(project.managerId);
+  if (planned && event !== "created") for (const id of [...assigned.map((person) => person.id), ...previousWorkers]) recipients.add(id);
+  recipients.delete(actor.id);
+  if (!recipients.size) return;
+  const [manager] = await tx.select({ name: users.name }).from(users).where(eq(users.id, project.managerId));
+  const [workType] = await tx.select({ name: workTypes.name }).from(workTypes).where(eq(workTypes.id, project.workTypeId));
+  const cars = await tx.select({ name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, project.id));
+  const payload: NotificationPayload = { actor: actor.name, projectName: project.name, ...(event === "created" || event === "planned" ? { manager: manager?.name ?? "", start: planned ? project.plannedStart : project.desiredStart, end: planned ? project.plannedEnd : project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, ...(planned ? { team: assigned.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`) } : {}) } : {}), ...(changes.length ? { changes } : {}) };
+  const type = { created: "PROJECT_CREATED_V2", planned: "PROJECT_PLANNED", changed: "PROJECT_CHANGED", archived: "PROJECT_ARCHIVED_V2" }[event];
+  await tx.insert(notifications).values([...recipients].map((userId) => ({ userId, type, projectId: project.id, subjectUserId: actor.id, payload })));
+}
 async function sessionStillValid(tx: Transaction, token: string | undefined, actor: { id: string; role: string }) {
   if (!token) return "unauthorized" as const;
   const [current] = await tx.select({ id: users.id, role: users.role, active: users.active }).from(users).where(eq(users.id, actor.id)).for("share");
@@ -194,10 +232,6 @@ app.patch("/api/users/:id", async (request, reply) => {
     }
     if (old.active && !updated.active) {
       await tx.delete(sessions).where(eq(sessions.userId, old.id));
-      if (old.role === "PRODUCTION_EMPLOYEE") {
-        const heads = await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"));
-        if (heads.length) await tx.insert(notifications).values(heads.map((head) => ({ userId: head.id, type: "EMPLOYEE_DEACTIVATED", subjectUserId: old.id })));
-      }
     }
     return updated;
   });
@@ -326,8 +360,7 @@ app.post("/api/projects", async (request, reply) => {
     if (!manager?.active || manager.role !== "MANAGER" || !workType?.active) return reply.code(400).send({ error: "Оберіть активного менеджера та тип робіт." });
     const [project] = await tx.insert(projects).values({ ...input.data, managerId, creatorId: actor.id }).returning();
     await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: project.id, action: "CREATE" });
-    const heads = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, "PRODUCTION_HEAD"), eq(users.active, true)));
-    if (heads.length) await tx.insert(notifications).values(heads.map((head) => ({ userId: head.id, type: "PROJECT_CREATED", projectId: project.id })));
+    await notifyProject(tx, actor, project, "created");
     return reply.code(201).send({ ...project, status: "NEW" });
   });
 });
@@ -364,14 +397,11 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
     if (sessionStatus !== "ok") return reply.code(sessionStatus === "changed" ? 409 : 401).send({ error: sessionStatus === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
     const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
     if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
-    if (actor.role !== "ADMIN" && !(actor.role === "MANAGER" && project.managerId === actor.id)) return reply.code(403).send({ error: "Недостатньо прав." });
+    if (actor.role !== "ADMIN" && actor.role !== "PRODUCTION_HEAD" && !(actor.role === "MANAGER" && project.managerId === actor.id)) return reply.code(403).send({ error: "Недостатньо прав." });
     const archivedAt = new Date();
     await tx.update(projects).set({ archivedAt, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id));
     await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: project.id, action: "ARCHIVE", field: "archivedAt", newValue: archivedAt.toISOString() });
-    if (actor.role === "MANAGER" && project.plannedStart) {
-      const heads = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, "PRODUCTION_HEAD"), eq(users.active, true)));
-      if (heads.length) await tx.insert(notifications).values(heads.map((head) => ({ userId: head.id, type: "PROJECT_ARCHIVED", projectId: project.id })));
-    }
+    await notifyProject(tx, actor, project, "archived");
     return { ok: true };
   });
 });
@@ -424,7 +454,7 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     const intersect = <T extends { start: string | null; end: string | null }>(item: T) => ({ ...item, overlapStart: item.start && item.start > plan.start ? item.start : plan.start, overlapEnd: item.end && item.end < plan.end ? item.end : plan.end });
     const conflicts = { employees: employeeConflicts.map(intersect), vehicles: vehicleConflicts.map(intersect) };
     if (!plan.confirmConflicts && (employeeConflicts.length || vehicleConflicts.length)) return reply.code(409).send({ error: "Виявлено перетин призначень.", conflicts });
-    await tx.update(projects).set({ plannedStart: plan.start, plannedEnd: plan.end, ...(plan.information !== undefined ? { information: plan.information } : {}), updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id));
+    const [plannedProject] = await tx.update(projects).set({ plannedStart: plan.start, plannedEnd: plan.end, ...(plan.information !== undefined ? { information: plan.information } : {}), updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id)).returning();
     await tx.delete(assignments).where(eq(assignments.projectId, project.id));
     await tx.insert(assignments).values(plan.employeeIds.map((userId) => ({ projectId: project.id, userId, responsible: userId === plan.responsibleId })));
     await tx.delete(projectVehicles).where(eq(projectVehicles.projectId, project.id));
@@ -439,14 +469,9 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     ];
     const entries = changes.filter((change) => change.before !== change.after).map((change) => ({ actorId: actor.id, entityType: "project", entityId: project.id, action: "UPDATE", field: change.field, oldValue: change.before, newValue: change.after }));
     if (entries.length) await tx.insert(audit).values(entries);
-    const oldIds = new Set(oldAssignments.map((item) => item.userId));
-    const newIds = new Set(plan.employeeIds);
-    const events = [
-      ...plan.employeeIds.filter((id) => !oldIds.has(id)).map((userId) => ({ userId, type: "EMPLOYEE_ASSIGNED", projectId: project.id })),
-      ...oldAssignments.filter((item) => !newIds.has(item.userId)).map((item) => ({ userId: item.userId, type: "EMPLOYEE_REMOVED", projectId: project.id })),
-      ...plan.employeeIds.filter((id) => oldIds.has(id) && (project.plannedStart !== plan.start || project.plannedEnd !== plan.end)).map((userId) => ({ userId, type: "PROJECT_DATES_CHANGED", projectId: project.id })),
-    ];
-    if (events.length) await tx.insert(notifications).values(events);
+    const changed = changes.filter((change) => change.before !== change.after);
+    if (!project.plannedStart) await notifyProject(tx, actor, plannedProject, "planned");
+    else if (changed.length) await notifyProject(tx, actor, plannedProject, "changed", await describeChanges(tx, changed), oldAssignments.map((item) => item.userId));
     return { ok: true, conflicts };
   });
 });
@@ -494,13 +519,9 @@ app.patch("/api/projects/:id", async (request, reply) => {
       if (!workType?.active) return reply.code(400).send({ error: "Оберіть активний тип робіт." });
     }
     const [updated] = await tx.update(projects).set({ ...changes, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, old.id)).returning();
-    for (const field of ["name", "managerId", "workTypeId", "address", "gps", "volume", "information", "desiredStart", "desiredEnd"] as const) {
-      if (old[field] !== updated[field]) await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: old.id, action: "UPDATE", field, oldValue: old[field], newValue: updated[field] });
-    }
-    if (actor.role === "MANAGER" && old.plannedStart && (old.address !== updated.address || old.gps !== updated.gps)) {
-      const heads = await tx.select({ id: users.id }).from(users).where(and(eq(users.role, "PRODUCTION_HEAD"), eq(users.active, true)));
-      if (heads.length) await tx.insert(notifications).values(heads.map((head) => ({ userId: head.id, type: "PROJECT_LOCATION_CHANGED", projectId: old.id })));
-    }
+    const changed = (["name", "managerId", "workTypeId", "address", "gps", "volume", "information", "desiredStart", "desiredEnd"] as const).filter((field) => old[field] !== updated[field]).map((field) => ({ field, before: old[field], after: updated[field] }));
+    for (const change of changed) await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: old.id, action: "UPDATE", field: change.field, oldValue: change.before, newValue: change.after });
+    if (changed.length) await notifyProject(tx, actor, updated, "changed", await describeChanges(tx, changed));
     return updated;
   });
 });
@@ -514,10 +535,11 @@ app.get("/api/employees", async (request, reply) => {
 app.get("/api/notifications", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
-  return db.select({ notification: notifications, subjectName: users.name, projectName: projects.name }).from(notifications)
+  const canOpen = actor.role === "PRODUCTION_EMPLOYEE" ? sql<boolean>`${projects.id} is not null and ${projects.archivedAt} is null and exists (select 1 from ${assignments} where ${assignments.projectId} = ${projects.id} and ${assignments.userId} = ${actor.id})` : actor.role === "MANAGER" ? sql<boolean>`${projects.id} is not null and (${projects.managerId} = ${actor.id} or (${projects.archivedAt} is null and (${projects.plannedStart} is not null or ${projects.desiredStart} is not null)))` : sql<boolean>`${projects.id} is not null`;
+  return db.select({ notification: notifications, subjectName: users.name, projectName: projects.name, canOpen }).from(notifications)
     .leftJoin(users, eq(notifications.subjectUserId, users.id)).leftJoin(projects, eq(notifications.projectId, projects.id))
     .where(eq(notifications.userId, actor.id)).orderBy(sql`${notifications.createdAt} desc`)
-    .then((rows) => rows.map(({ notification, subjectName, projectName }) => ({ ...notification, subjectName, projectName })));
+    .then((rows) => rows.map(({ notification, subjectName, projectName, canOpen }) => ({ ...notification, subjectName, projectName, canOpen })));
 });
 app.post("/api/notifications/:id/read", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
@@ -583,6 +605,7 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
       if (!project || project.archivedAt || !(actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD" || (actor.role === "MANAGER" && project.managerId === actor.id))) throw new AttachmentAccessChanged();
       const [item] = await tx.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size }).returning();
       await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: item.id, action: "CREATE" });
+      await notifyProject(tx, actor, project, "changed", [{ field: "Вкладення", before: null, after: file.filename }]);
       return item;
     });
     return reply.code(201).send({ id: attachment.id, projectId: attachment.projectId, uploaderId: attachment.uploaderId, name: attachment.name, contentType: attachment.contentType, size: attachment.size, createdAt: attachment.createdAt });
@@ -631,6 +654,7 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
     if (actor.role !== "ADMIN" && found.uploaderId !== actor.id) return false;
     await tx.update(attachments).set({ deletedAt: new Date() }).where(eq(attachments.id, found.id));
     await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: found.id, action: "DELETE" });
+    await notifyProject(tx, actor, project, "changed", [{ field: "Вкладення", before: found.name, after: null }]);
     return found;
   });
   if (item === "changed" || item === "unauthorized") return reply.code(item === "changed" ? 409 : 401).send({ error: item === "changed" ? "Права змінилися. Оновіть дані та повторіть дію." : "Сесію завершено." });
@@ -694,6 +718,7 @@ try {
   startupStage = "schema";
   await pool.query("select key_code from users limit 0");
   await pool.query("select subject_user_id from notifications limit 0");
+  await pool.query("select payload from notifications limit 0");
   await pool.query("select storage_deleted_at from attachments limit 0");
   startupStage = "server";
   await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
