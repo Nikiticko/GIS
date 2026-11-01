@@ -62,7 +62,7 @@ button:disabled { cursor: not-allowed; }
 .brand-lockup strong { display: block; font-size: 14px; letter-spacing: -.02em; line-height: 1.15; }
 .brand-lockup span { display: block; margin-top: 3px; color: #8797a8; font-size: 9px; letter-spacing: .13em; font-weight: 700; }
 .desktop-nav { display: flex; align-self: stretch; align-items: center; gap: 6px; }
-.nav-link { height: 40px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 0 14px; background: transparent; color: #697b8e; font-size: 13px; font-weight: 550; transition: background .16s, color .16s; }
+.nav-link { height: 40px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 0 14px; background: transparent; color: #697b8e; font-size: 13px; font-weight: 550; text-decoration: none; transition: background .16s, color .16s; }
 .nav-link:hover { background: #f4f7fa; color: var(--ink); }
 .nav-link.active { color: var(--navy); background: #eef4f9; font-weight: 650; }
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 16px; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { Archive, Bell, CalendarDays, ClipboardList, HardHat, LogOut, Plus, Settings, Shield, Users } from "lucide-react";
 import { api, ApiError, type Attachment, type AuditEntry, type CurrentUser, type Employee, type Notification, type ProjectDetail, type ProjectRow, type ProjectValues, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { LoginView } from "@/components/LoginView";
@@ -11,6 +11,12 @@ import { Input } from "@/components/ui/input";
 import { ProductionMonthCalendar } from "@/components/ProductionMonthCalendar";
 
 type Screen = "projects" | "schedule" | "archive" | "employees" | "users" | "directories" | "audit" | "notifications";
+const paths: Record<Screen, string> = { projects: "/projects", schedule: "/schedule", archive: "/archive", employees: "/employees", users: "/users", directories: "/directories", audit: "/audit", notifications: "/notifications" };
+function screenFromPath(path: string): Screen | null {
+  const normalized = path.replace(/\/+$/, "") || "/";
+  if (normalized === "/") return "projects";
+  return (Object.keys(paths) as Screen[]).find((key) => paths[key] === normalized) ?? null;
+}
 const statuses = { NEW: "Новий", PLANNED: "Запланований", IN_PROGRESS: "У роботі", COMPLETED: "Завершений" };
 const notificationLabels: Record<string, string> = { PROJECT_CREATED: "Створено новий об’єкт", PROJECT_LOCATION_CHANGED: "Змінено локацію об’єкта", PROJECT_ARCHIVED: "Об’єкт архівовано", EMPLOYEE_ASSIGNED: "Вас призначено на об’єкт", EMPLOYEE_REMOVED: "Вас знято з об’єкта", PROJECT_DATES_CHANGED: "Змінено дати об’єкта", EMPLOYEE_DEACTIVATED: "Працівника деактивовано" };
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Не вдалося виконати дію.";
@@ -23,7 +29,7 @@ export default function App() {
   const [checking, setChecking] = useState(true);
   const [connectionError, setConnectionError] = useState("");
   const [data, setData] = useState<Data>(initialData);
-  const [screen, setScreen] = useState<Screen>("projects");
+  const [screen, setScreen] = useState<Screen | null>(() => screenFromPath(window.location.pathname));
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [modal, setModal] = useState<"create" | "detail" | "edit" | "plan" | null>(null);
@@ -41,17 +47,22 @@ export default function App() {
     setData({ projects, schedule, archive, employees, users, workTypes, vehicles, notifications, audit });
     setConnectionError("");
   }, []);
-  const reset = useCallback(() => { sessionIdentity.current = null; setUser(null); setData(initialData); setDetail(null); setModal(null); setScreen("projects"); setConnectionError(""); }, []);
+  const reset = useCallback(() => { sessionIdentity.current = null; setUser(null); setData(initialData); setDetail(null); setModal(null); setConnectionError(""); }, []);
   const loadSession = useCallback(async () => {
     try {
       const current = await api.me();
-      if (sessionIdentity.current && (sessionIdentity.current.id !== current.id || sessionIdentity.current.role !== current.role)) { setData(initialData); setDetail(null); setModal(null); setScreen("projects"); }
+      if (sessionIdentity.current && (sessionIdentity.current.id !== current.id || sessionIdentity.current.role !== current.role)) { setData(initialData); setDetail(null); setModal(null); }
       sessionIdentity.current = current; setUser(current); await refresh(current);
     }
     catch (error) { if (error instanceof ApiError && error.status === 401) reset(); else setConnectionError(errorMessage(error)); }
     finally { setChecking(false); }
   }, [refresh, reset]);
   useEffect(() => { void loadSession(); }, [loadSession]);
+  useEffect(() => {
+    const onPopState = () => { setScreen(screenFromPath(window.location.pathname)); setModal(null); setDetail(null); };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   useEffect(() => {
     if (!user) return;
     const timer = window.setInterval(() => void loadSession(), 60_000);
@@ -89,6 +100,12 @@ export default function App() {
   }
   async function refreshDetail(id: string) { const [project, files] = await Promise.all([api.project(id), api.attachments(id)]); setDetail(project); setAttachments(files); }
   async function logout() { await perform(async () => { await api.logout(); reset(); }); }
+  function navigate(event: MouseEvent<HTMLAnchorElement>, target: Screen) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (window.location.pathname !== paths[target]) window.history.pushState(null, "", paths[target]);
+    setScreen(target); setModal(null); setDetail(null);
+  }
   if (checking) return <div className="empty-state">Завантаження…</div>;
   if (!user) return connectionError ? <div className="login-page"><div className="login-card"><p role="alert">{connectionError}</p><Button onClick={() => void loadSession()}>Спробувати ще раз</Button></div></div> : <LoginView onLogin={(current) => { sessionIdentity.current = current; setUser(current); void refresh(current).catch((error) => setConnectionError(errorMessage(error))); }} />;
   const admin = user.role === "ADMIN", head = user.role === "PRODUCTION_HEAD", manager = user.role === "MANAGER", employee = user.role === "PRODUCTION_EMPLOYEE";
@@ -101,14 +118,15 @@ export default function App() {
     ...(admin ? [{ key: "users" as const, title: "Користувачі", icon: Users }, { key: "directories" as const, title: "Довідники", icon: Settings }, { key: "audit" as const, title: "Аудит", icon: Shield }] : []),
     { key: "notifications", title: `Сповіщення${data.notifications.some((item) => !item.readAt) ? " •" : ""}`, icon: Bell },
   ];
-  const effectiveScreen = nav.some((item) => item.key === screen) ? screen : "projects";
+  const effectiveScreen = nav.some((item) => item.key === screen) ? screen : null;
   const currentRows = effectiveScreen === "archive" ? data.archive : data.projects;
   const canEdit = Boolean(detail && !detail.project.archivedAt && (admin || head || (manager && detail.project.managerId === user.id)));
   return <div className="app-shell">
     <header className="topbar"><div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Reports</strong><span>ВИРОБНИЦТВО</span></div></div><div className="production-account"><span>{user.name}</span><Button variant="outline" onClick={() => void logout()} disabled={busy}><LogOut data-icon="inline-start" />Вийти</Button></div></header>
-    <div className="production-layout"><nav className="production-nav" aria-label="Основна навігація">{nav.map(({ key, title, icon: Icon }) => <button key={key} className={`nav-link ${effectiveScreen === key ? "active" : ""}`} onClick={() => setScreen(key)}><Icon size={17} />{title}</button>)}</nav>
+    <div className="production-layout"><nav className="production-nav" aria-label="Основна навігація">{nav.map(({ key, title, icon: Icon }) => <a key={key} href={paths[key]} className={`nav-link ${effectiveScreen === key ? "active" : ""}`} aria-current={effectiveScreen === key ? "page" : undefined} onClick={(event) => navigate(event, key)}><Icon size={17} />{title}</a>)}</nav>
       <main className="main-content"><div className="content-inner">
         {connectionError && <div className="connection-alert" role="alert">{connectionError} <button onClick={() => void loadSession()}>Повторити</button></div>}
+        {!effectiveScreen && <section className="page-stack"><div className="page-heading"><h1>{screen ? "Доступ до сторінки обмежено" : "Сторінку не знайдено"}</h1></div><a href={paths.projects} onClick={(event) => navigate(event, "projects")}>Перейти до об’єктів</a></section>}
         {(effectiveScreen === "projects" || effectiveScreen === "archive") && <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{effectiveScreen === "archive" ? "Архів об’єктів" : manager || employee ? "Мої об’єкти" : "Об’єкти"}</h1></div>{effectiveScreen === "projects" && canCreate && <Button onClick={() => setModal("create")}><Plus data-icon="inline-start" />Новий об’єкт</Button>}</div><ProjectList rows={currentRows} open={openProject} /></section>}
         {effectiveScreen === "schedule" && <ProductionMonthCalendar rows={data.schedule} employee={employee} onOpen={(id) => void openProject(id)} />}
         {effectiveScreen === "employees" && <section className="page-stack"><div className="page-heading"><h1>Працівники виробництва</h1></div><div className="production-list">{data.employees.map((person) => <div className="production-panel" key={person.id}><strong>{person.name}</strong><p>{person.phone || "Телефон не вказано"} · {person.active ? "Активний" : "Неактивний"}{person.foreman ? " · Бригадир" : ""}</p></div>)}</div></section>}
