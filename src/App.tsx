@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ProductionMonthCalendar } from "@/components/ProductionMonthCalendar";
+import { formatDate, formatDateTime } from "@/lib/date";
 
 type Screen = "projects" | "schedule" | "archive" | "employees" | "users" | "directories" | "audit" | "notifications";
 const paths: Record<Screen, string> = { projects: "/projects", schedule: "/schedule", archive: "/archive", employees: "/employees", users: "/users", directories: "/directories", audit: "/audit", notifications: "/notifications" };
@@ -169,7 +170,7 @@ export default function App() {
         {effectiveScreen === "users" && admin && <ProductionUsers users={data.users} refresh={reload} />}
         {effectiveScreen === "directories" && admin && <ProductionDirectories workTypes={data.workTypes} vehicles={data.vehicles} refresh={reload} />}
         {effectiveScreen === "audit" && admin && <ProductionAudit entries={data.audit} users={data.users} projects={[...data.projects, ...data.archive]} workTypes={data.workTypes} vehicles={data.vehicles} />}
-        {effectiveScreen === "notifications" && <section className="page-stack"><div className="page-heading"><h1>Сповіщення</h1></div><div className="production-list">{data.notifications.map((notice) => <article className="production-panel production-row" key={notice.id}><div><strong>{notificationLabels[notice.type] ?? "Системне сповіщення"}{notice.payload?.projectName || notice.projectName ? `: ${notice.payload?.projectName || notice.projectName}` : ""}</strong><p>{new Date(notice.createdAt).toLocaleString("uk-UA")} · {notice.readAt ? "Прочитано" : "Нове"}</p>{notice.payload && <><p>Хто: {notice.payload.actor}</p>{notice.payload.manager !== undefined && <><p>Менеджер: {notice.payload.manager}</p><p>Дати: {period(notice.payload.start ?? null, notice.payload.end ?? null)}</p><p>Тип робіт: {notice.payload.workType}</p><p>Обсяг робіт: {notice.payload.volume || "Не вказано"}</p>{notice.payload.team && <p>Бригада: {notice.payload.team.join(", ") || "Не призначена"}</p>}{notice.payload.vehicles && <p>Автомобілі: {notice.payload.vehicles.join(", ") || "Не призначені"}</p>}</>}{notice.payload.changes?.map((change, index) => <p key={`${change.field}-${index}`}>{change.field}: {change.before || "—"} → {change.after || "—"}</p>)}</>}</div><div className="production-actions">{notice.projectId && notice.canOpen && <Button variant="outline" onClick={() => void openProject(notice.projectId!)}>Відкрити об’єкт</Button>}{!notice.readAt && <Button variant="outline" onClick={() => void perform(async () => { await api.markRead(notice.id); await reload(); })}>Позначити прочитаним</Button>}</div></article>)}{!data.notifications.length && <p>Сповіщень поки немає.</p>}</div></section>}
+        {effectiveScreen === "notifications" && <section className="page-stack"><div className="page-heading"><h1>Сповіщення</h1></div><div className="production-list">{data.notifications.map((notice) => <article className="production-panel production-row" key={notice.id}><div><strong>{notificationLabels[notice.type] ?? "Системне сповіщення"}{notice.payload?.projectName || notice.projectName ? `: ${notice.payload?.projectName || notice.projectName}` : ""}</strong><p>{formatDateTime(notice.createdAt)} · {notice.readAt ? "Прочитано" : "Нове"}</p>{notice.payload && <><p>Хто: {notice.payload.actor}</p>{notice.payload.manager !== undefined && <><p>Менеджер: {notice.payload.manager}</p><p>Дати: {period(notice.payload.start ?? null, notice.payload.end ?? null)}</p><p>Тип робіт: {notice.payload.workType}</p><p>Обсяг робіт: {notice.payload.volume || "Не вказано"}</p>{notice.payload.team && <p>Бригада: {notice.payload.team.join(", ") || "Не призначена"}</p>}{notice.payload.vehicles && <p>Автомобілі: {notice.payload.vehicles.join(", ") || "Не призначені"}</p>}</>}{notice.payload.changes?.map((change, index) => <p key={`${change.field}-${index}`}>{change.field}: {formatChangeValue(change.field, change.before)} → {formatChangeValue(change.field, change.after)}</p>)}</>}</div><div className="production-actions">{notice.projectId && notice.canOpen && <Button variant="outline" onClick={() => void openProject(notice.projectId!)}>Відкрити об’єкт</Button>}{!notice.readAt && <Button variant="outline" onClick={() => void perform(async () => { await api.markRead(notice.id); await reload(); })}>Позначити прочитаним</Button>}</div></article>)}{!data.notifications.length && <p>Сповіщень поки немає.</p>}</div></section>}
       </div></main>
     </div>
     <Dialog open={modal !== null} onOpenChange={(open) => { if (!open && !uploading) setModal(null); }}><DialogContent className="modal-content production-modal">
@@ -186,7 +187,13 @@ export default function App() {
   </div>;
 }
 
-function period(start: string | null, end: string | null) { return start && end ? `${start} — ${end}` : "Не вказано"; }
+const dateFields = new Set(["desiredStart", "desiredEnd", "plannedStart", "plannedEnd"]);
+function formatChangeValue(field: string, value: string | null) {
+  if (dateFields.has(field)) return formatDate(value, "—");
+  if (field === "archivedAt") return formatDateTime(value, "—");
+  return value || "—";
+}
+function period(start: string | null, end: string | null) { return start && end ? `${formatDate(start)} — ${formatDate(end)}` : "Не вказано"; }
 function ProjectList({ rows, open }: { rows: ProjectRow[]; open: (id: string) => Promise<void> }) {
   return <div className="production-list">{rows.map(({ project, status, workTypeName }) => <button className="production-panel production-project" key={project.id} onClick={() => void open(project.id)}><strong>{project.name}</strong><span>{statuses[status]} · {workTypeName}</span><span>{project.address} · {period(project.plannedStart, project.plannedEnd)}</span></button>)}{!rows.length && <div className="empty-state">Об’єктів немає.</div>}</div>;
 }

@@ -6,6 +6,7 @@ import { addDays } from "@/lib/project-utils";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DateInput } from "@/components/ui/date-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -66,7 +67,7 @@ export function CreateProjectDialog({ open, onOpenChange, onSave }: {
     <form className="form-stack" onSubmit={submit}>
       <Field label="Назва об’єкта"><Input value={values.name} onChange={(event) => setValues({ ...values, name: event.target.value })} placeholder="Наприклад, БЦ Центральний" /></Field>
       <div className="form-row"><Field label="Місто"><Input value={values.city} onChange={(event) => setValues({ ...values, city: event.target.value })} placeholder="Київ" /></Field><Field label="Адреса / місце розташування"><Input value={values.location} onChange={(event) => setValues({ ...values, location: event.target.value })} placeholder="вул. Прикладна, 10" /></Field></div>
-      <div className="planning-dates"><Field label="Бажаний початок"><Input type="date" value={values.startDate} onChange={(event) => setValues({ ...values, startDate: event.target.value })} required /></Field><span className="date-arrow">—</span><Field label="Бажане завершення"><Input type="date" min={values.startDate || undefined} value={values.endDate} onChange={(event) => setValues({ ...values, endDate: event.target.value })} required /></Field></div>
+      <div className="planning-dates"><Field label="Бажаний початок"><DateInput value={values.startDate} onValueChange={(value) => setValues({ ...values, startDate: value })} required /></Field><span className="date-arrow">—</span><Field label="Бажане завершення"><DateInput value={values.endDate} onValueChange={(value) => setValues({ ...values, endDate: value })} required /></Field></div>
       <Field label="Тип робіт"><select className="form-select" value={selectedWorkType} onChange={(event) => { setWorkTypeChoice(event.target.value); setValues({ ...values, workType: standardWorkTypes.includes(event.target.value) ? event.target.value : "", volume: "" }); }} required>
         <option value="" disabled>Оберіть тип робіт</option>
         {standardWorkTypes.map((type) => <option key={type} value={type}>{type}</option>)}
@@ -192,7 +193,7 @@ export function PlanProjectDialog({ project, data, onOpenChange, onSave }: {
     {project && <>
       <DialogHeader><p className="eyebrow">ПЛАНУВАННЯ ОБ’ЄКТА</p><DialogTitle>{project.name}</DialogTitle><DialogDescription><MapPin size={13} />{project.city} · {project.location}</DialogDescription></DialogHeader>
       <form className="form-stack" onSubmit={submit}>
-        <div className="planning-dates"><Field label="Початок робіт"><Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field><span className="date-arrow">—</span><Field label="Планове завершення"><Input type="date" min={startDate} value={endDate} onChange={(event) => setEndDate(event.target.value)} /></Field></div>
+        <div className="planning-dates"><Field label="Початок робіт"><DateInput value={startDate} onValueChange={setStartDate} /></Field><span className="date-arrow">—</span><Field label="Планове завершення"><DateInput value={endDate} onValueChange={setEndDate} /></Field></div>
         <Field label="Автомобіль для команди"><select className="form-select" value={vehicleId} onChange={(event) => setVehicleId(event.target.value as VehicleId | "")} required>
           <option value="" disabled>Оберіть автомобіль</option>{vehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.name}</option>)}
         </select></Field>

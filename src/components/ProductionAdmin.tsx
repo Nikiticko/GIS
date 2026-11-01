@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { api, ApiError, type AuditEntry, type ProjectRow, type Role, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { formatDate, formatDateTime } from "@/lib/date";
 
 const roles: Record<Role, string> = { ADMIN: "Адміністратор", MANAGER: "Менеджер", PRODUCTION_HEAD: "Керівник виробництва", PRODUCTION_EMPLOYEE: "Працівник виробництва" };
 const message = (reason: unknown) => reason instanceof Error ? reason.message : "Не вдалося виконати дію.";
@@ -109,12 +110,14 @@ export function ProductionAudit({ entries, users, projects, workTypes, vehicles 
     if (field === "role") return roles[raw as Role] ?? raw;
     if (field === "active") return raw === "true" ? "Активний" : raw === "false" ? "Неактивний" : raw;
     if (field === "foreman") return raw === "true" ? "Так" : raw === "false" ? "Ні" : raw;
+    if (field && ["desiredStart", "desiredEnd", "plannedStart", "plannedEnd"].includes(field)) return formatDate(raw, "—");
+    if (field === "archivedAt") return formatDateTime(raw, "—");
     if (field && ["managerId", "workTypeId", "employees", "responsible", "vehicles"].includes(field)) return raw.split(",").map((id) => names.get(id) ?? id).join(", ");
     return raw;
   }
   return <section className="page-stack"><div className="page-heading"><h1>Журнал змін</h1></div><div className="production-list">{entries.map((entry) => <article className="production-panel" key={entry.id}>
     <strong>{auditActions[entry.action] ?? entry.action} · {auditEntities[entry.entityType] ?? entry.entityType}{names.has(entry.entityId) ? `: ${names.get(entry.entityId)}` : ` · ${entry.entityId}`}</strong>
-    <p>{users.find((user) => user.id === entry.actorId)?.name ?? "—"} · {new Date(entry.createdAt).toLocaleString("uk-UA")}</p>
+    <p>{users.find((user) => user.id === entry.actorId)?.name ?? "—"} · {formatDateTime(entry.createdAt)}</p>
     {entry.field && <p>{auditFields[entry.field] ?? entry.field}: {value(entry.field, entry.oldValue)} → {value(entry.field, entry.newValue)}</p>}
   </article>)}{!entries.length && <p>Записів поки немає.</p>}</div></section>;
 }

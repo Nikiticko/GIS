@@ -96,7 +96,8 @@ export function getVehicleAvailability(
 
 export function shortDate(value: string | null) {
   if (!value) return "Дату не вказано";
-  return new Intl.DateTimeFormat("uk-UA", { day: "numeric", month: "short" }).format(new Date(`${value}T00:00:00`));
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : "Дату не вказано";
 }
 
 export function dateRange(start: string | null, end: string | null) {

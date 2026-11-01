@@ -1,6 +1,6 @@
 import { BriefcaseBusiness, MapPin, UserRound } from "lucide-react";
 import type { AppData } from "@/types";
-import { getEmployeeCurrentProjects, localDate, projectsForEmployee, statusLabel } from "@/lib/project-utils";
+import { getEmployeeCurrentProjects, localDate, projectsForEmployee, shortDate, statusLabel } from "@/lib/project-utils";
 
 export function TeamView({ data }: { data: AppData }) {
   const employees = data.employees.map((employee) => {
@@ -20,7 +20,7 @@ export function TeamView({ data }: { data: AppData }) {
       }) : <p className="light-empty">Сьогодні немає призначень</p>}</div>
         <div className="employee-project-block"><span className="block-label">ДАЛІ</span>{upcoming.length ? upcoming.slice(0, 2).map((project) => {
           const creator = data.users.find((user) => user.id === project.creatorId);
-          return <div className="employee-job upcoming-job" key={project.id}><strong>{project.name}</strong><small><MapPin size={12} />{project.city} · {project.startDate}</small>{creator && <small>Менеджер: {creator.name}</small>}</div>;
+          return <div className="employee-job upcoming-job" key={project.id}><strong>{project.name}</strong><small><MapPin size={12} />{project.city} · {shortDate(project.startDate)}</small>{creator && <small>Менеджер: {creator.name}</small>}</div>;
         }) : <p className="light-empty">Немає нових призначень</p>}</div></div>
     </article>)}</div>
   </section>;
