@@ -89,7 +89,7 @@ app.post("/api/auth/logout", async (request, reply) => {
 const roles = z.enum(["MANAGER", "PRODUCTION_HEAD", "PRODUCTION_EMPLOYEE"]);
 const uuidParam = z.object({ id: z.string().uuid() });
 const createUser = z.object({ name: z.string().trim().min(1), role: roles, phone: z.string().trim().nullable().optional(), foreman: z.boolean().optional() }).strict();
-const updateUser = createUser.partial().extend({ active: z.boolean().optional() }).strict();
+const updateUser = createUser.partial().extend({ active: z.boolean().optional(), expectedUpdatedAt: z.iso.datetime({ offset: true }).optional() }).strict();
 
 async function currentUser(token: string | undefined) {
   if (!token) return undefined;
@@ -146,17 +146,19 @@ app.patch("/api/users/:id", async (request, reply) => {
   const actor = await requireAdmin(request, reply);
   if (!actor) return;
   const params = uuidParam.safeParse(request.params), input = updateUser.safeParse(request.body);
-  if (!params.success || !input.success || !Object.keys(input.data).length) return reply.code(400).send({ error: "Некоректні дані користувача." });
+  if (!params.success || !input.success || !Object.keys(input.data).some((key) => key !== "expectedUpdatedAt")) return reply.code(400).send({ error: "Некоректні дані користувача." });
+  const { expectedUpdatedAt, ...changes } = input.data;
   return db.transaction(async (tx) => {
         if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
     const [old] = await tx.select().from(users).where(eq(users.id, params.data.id)).for("update");
     if (!old) return reply.code(404).send({ error: "Користувача не знайдено." });
-    if (old.role === "ADMIN" && (input.data.role !== undefined || input.data.active === false)) return reply.code(403).send({ error: "Роль і активність адміністратора захищені." });
-    const nextRole = input.data.role ?? old.role;
-    const nextForeman = input.data.foreman ?? (nextRole === "PRODUCTION_EMPLOYEE" ? old.foreman : false);
+    if (expectedUpdatedAt && new Date(expectedUpdatedAt).getTime() !== old.updatedAt.getTime()) return reply.code(409).send({ error: "Профіль змінився. Оновіть дані перед збереженням." });
+    if (old.role === "ADMIN" && (changes.role !== undefined || changes.active === false)) return reply.code(403).send({ error: "Роль і активність адміністратора захищені." });
+    const nextRole = changes.role ?? old.role;
+    const nextForeman = changes.foreman ?? (nextRole === "PRODUCTION_EMPLOYEE" ? old.foreman : false);
     if (nextForeman && nextRole !== "PRODUCTION_EMPLOYEE") return reply.code(400).send({ error: "Бригадиром може бути лише працівник виробництва." });
-    const next = { ...input.data, ...(input.data.phone !== undefined ? { phone: input.data.phone || null } : {}), foreman: nextForeman };
-    const [updated] = await tx.update(users).set({ ...next, updatedAt: new Date() }).where(eq(users.id, old.id)).returning();
+    const next = { ...changes, ...(changes.phone !== undefined ? { phone: changes.phone || null } : {}), foreman: nextForeman };
+    const [updated] = await tx.update(users).set({ ...next, updatedAt: sql`greatest(clock_timestamp(), ${users.updatedAt} + interval '1 millisecond')` }).where(eq(users.id, old.id)).returning();
     for (const field of ["name", "role", "phone", "active", "foreman"] as const) {
       if (old[field] !== updated[field]) await tx.insert(audit).values({ actorId: actor.id, entityType: "user", entityId: old.id, action: "UPDATE", field, oldValue: String(old[field] ?? ""), newValue: String(updated[field] ?? "") });
     }
@@ -199,7 +201,7 @@ app.post("/api/users/:id/key-code/reissue", async (request, reply) => {
         if (!user) return reply.code(404).send({ error: "Користувача не знайдено." });
         let code: string;
         do { code = String(randomInt(0, 1_000_000)).padStart(6, "0"); } while (code === user.keyCode);
-        await tx.update(users).set({ keyCode: code, updatedAt: new Date() }).where(eq(users.id, user.id));
+        await tx.update(users).set({ keyCode: code, updatedAt: sql`greatest(clock_timestamp(), ${users.updatedAt} + interval '1 millisecond')` }).where(eq(users.id, user.id));
         await tx.delete(sessions).where(eq(sessions.userId, user.id));
         await tx.insert(audit).values({ actorId: actor.id, entityType: "user", entityId: user.id, action: "REISSUE_KEY_CODE" });
         return { keyCode: code };
@@ -248,15 +250,19 @@ app.patch("/api/:kind/:id", async (request, reply) => {
   if (!actor) return;
   const params = directoryParam.safeParse(request.params);
   if (!params.success) return reply.code(404).send({ error: "Запис не знайдено." });
-  const data = (params.data.kind === "vehicles" ? vehicleInput.partial() : z.object({ active: z.boolean() }).strict()).safeParse(request.body);
-  if (!data.success || !Object.keys(data.data).length) return reply.code(400).send({ error: "Некоректні дані." });
+  const expectedVehicle = z.object({ name: z.string(), registration: z.string(), active: z.boolean() }).strict();
+  const data = (params.data.kind === "vehicles" ? vehicleInput.partial().extend({ expected: expectedVehicle.optional() }) : z.object({ active: z.boolean(), expectedActive: z.boolean().optional() }).strict()).safeParse(request.body);
+  if (!data.success) return reply.code(400).send({ error: "Некоректні дані." });
+  const { expected, expectedActive, ...changes } = data.data as { name?: string; registration?: string; active?: boolean; expected?: z.infer<typeof expectedVehicle>; expectedActive?: boolean };
+  if (!Object.keys(changes).length) return reply.code(400).send({ error: "Некоректні дані." });
   return db.transaction(async (tx) => {
-        if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
     const table = params.data.kind === "vehicles" ? vehicles : workTypes;
     const [old] = await tx.select().from(table).where(eq(table.id, params.data.id)).for("update");
     if (!old) return reply.code(404).send({ error: "Запис не знайдено." });
-    const [updated] = await tx.update(table).set(data.data).where(eq(table.id, old.id)).returning();
-    for (const field of Object.keys(data.data) as (keyof typeof data.data)[]) {
+    if ((expected && (!("registration" in old) || old.name !== expected.name || old.registration !== expected.registration || old.active !== expected.active)) || (expectedActive !== undefined && old.active !== expectedActive)) return reply.code(409).send({ error: "Запис змінився. Оновіть дані перед збереженням." });
+    const [updated] = await tx.update(table).set(changes).where(eq(table.id, old.id)).returning();
+    for (const field of Object.keys(changes) as (keyof typeof changes)[]) {
       const before = (old as Record<string, unknown>)[field], after = (updated as Record<string, unknown>)[field];
       if (before !== after) await tx.insert(audit).values({ actorId: actor.id, entityType: params.data.kind, entityId: old.id, action: "UPDATE", field, oldValue: String(before ?? ""), newValue: String(after ?? "") });
     }

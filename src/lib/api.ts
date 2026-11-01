@@ -1,7 +1,7 @@
 export type Role = "ADMIN" | "MANAGER" | "PRODUCTION_HEAD" | "PRODUCTION_EMPLOYEE";
 export type Status = "NEW" | "PLANNED" | "IN_PROGRESS" | "COMPLETED";
 export interface CurrentUser { id: string; name: string; role: Role }
-export interface User extends CurrentUser { phone: string | null; active: boolean; foreman: boolean; keyCode: string }
+export interface User extends CurrentUser { phone: string | null; active: boolean; foreman: boolean; keyCode: string; updatedAt: string }
 export interface Employee { id: string; name: string; phone: string | null; active: boolean; foreman: boolean }
 export interface WorkType { id: string; name: string; active: boolean }
 export interface Vehicle { id: string; name: string; registration: string; active: boolean }
@@ -51,16 +51,16 @@ export const api = {
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   users: () => request<User[]>("/users"),
   createUser: (values: { name: string; role: Exclude<Role, "ADMIN">; phone?: string | null; foreman?: boolean }) => request<User>("/users", json("POST", values)),
-  updateUser: (id: string, values: Partial<Pick<User, "name" | "phone" | "foreman" | "active"> & { role: Exclude<Role, "ADMIN"> }>) => request<User>(`/users/${id}`, json("PATCH", values)),
+  updateUser: (id: string, values: Partial<Pick<User, "name" | "phone" | "foreman" | "active"> & { role: Exclude<Role, "ADMIN"> }> & { expectedUpdatedAt?: string }) => request<User>(`/users/${id}`, json("PATCH", values)),
   revokeSessions: (id: string) => request<{ ok: boolean }>(`/users/${id}/sessions/revoke`, { method: "POST" }),
   reissueKey: (id: string) => request<{ keyCode: string }>(`/users/${id}/key-code/reissue`, { method: "POST" }),
   employees: () => request<Employee[]>("/employees"),
   workTypes: () => request<WorkType[]>("/work-types"),
   createWorkType: (name: string) => request<WorkType>("/work-types", json("POST", { name })),
-  updateWorkType: (id: string, active: boolean) => request<WorkType>(`/work-types/${id}`, json("PATCH", { active })),
+  updateWorkType: (id: string, active: boolean, expectedActive?: boolean) => request<WorkType>(`/work-types/${id}`, json("PATCH", { active, expectedActive })),
   vehicles: () => request<Vehicle[]>("/vehicles"),
   createVehicle: (name: string, registration: string) => request<Vehicle>("/vehicles", json("POST", { name, registration })),
-  updateVehicle: (id: string, values: Partial<Pick<Vehicle, "name" | "registration" | "active">>) => request<Vehicle>(`/vehicles/${id}`, json("PATCH", values)),
+  updateVehicle: (id: string, values: Partial<Pick<Vehicle, "name" | "registration" | "active">> & { expected?: Pick<Vehicle, "name" | "registration" | "active"> }) => request<Vehicle>(`/vehicles/${id}`, json("PATCH", values)),
   projects: (scope: "own" | "schedule" | "archive" = "own") => request<ProjectRow[]>(`/projects?scope=${scope}`),
   project: (id: string) => request<ProjectDetail>(`/projects/${id}`),
   createProject: (values: ProjectValues) => request<Project>("/projects", json("POST", values)),
