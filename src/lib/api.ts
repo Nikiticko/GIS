@@ -7,7 +7,7 @@ export interface WorkType { id: string; name: string; active: boolean }
 export interface Vehicle { id: string; name: string; registration: string; active: boolean }
 export interface Project {
   id: string; name: string; managerId: string; creatorId: string; workTypeId: string;
-  address: string | null; gps: string | null; volume: string | null; information: string | null;
+  address: string; locationUrl: string | null; volume: string | null; information: string | null;
   desiredStart: string | null; desiredEnd: string | null; plannedStart: string | null; plannedEnd: string | null;
   archivedAt: string | null; createdAt: string; updatedAt: string;
 }
@@ -26,7 +26,7 @@ export interface Conflicts { employees: Conflict[]; vehicles: Conflict[] }
 export interface Plan { start: string; end: string; employeeIds: string[]; responsibleId: string; vehicleIds: string[]; confirmConflicts: boolean; expectedUpdatedAt: string; information?: string | null }
 export interface Availability { employees: BusyResource[]; vehicles: BusyResource[] }
 interface BusyResource { resourceId: string; projectId: string; projectName: string; start: string; end: string }
-export type ProjectValues = Pick<Project, "name" | "workTypeId" | "address" | "gps" | "volume" | "information" | "desiredStart" | "desiredEnd"> & { managerId?: string };
+export type ProjectValues = Pick<Project, "name" | "workTypeId" | "address" | "locationUrl" | "volume" | "information" | "desiredStart" | "desiredEnd"> & { managerId?: string };
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public conflicts?: Conflicts) { super(message); }

@@ -20,10 +20,10 @@ export const vehicles = pgTable("vehicles", { id: id(), name: text("name").notNu
 export const projects = pgTable("production_projects", {
   id: id(), name: text("name").notNull(), managerId: uuid("manager_id").notNull().references(() => users.id),
   creatorId: uuid("creator_id").notNull().references(() => users.id), workTypeId: uuid("work_type_id").notNull().references(() => workTypes.id),
-  address: text("address"), gps: text("gps"), volume: text("volume"), information: text("information"),
+  address: text("address"), locationUrl: text("gps"), volume: text("volume"), information: text("information"),
   desiredStart: date("desired_start"), desiredEnd: date("desired_end"), plannedStart: date("planned_start"), plannedEnd: date("planned_end"),
   archivedAt: timestamp("archived_at", { withTimezone: true }), createdAt: createdAt(), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [check("project_location_check", sql`coalesce(length(trim(${t.address})), 0) > 0 or coalesce(length(trim(${t.gps})), 0) > 0`),
+}, (t) => [check("project_location_check", sql`coalesce(length(trim(${t.address})), 0) > 0`),
   check("project_desired_dates_check", sql`(${t.desiredStart} is null and ${t.desiredEnd} is null) or (${t.desiredStart} is not null and ${t.desiredEnd} is not null and ${t.desiredEnd} >= ${t.desiredStart})`),
   check("project_planned_dates_check", sql`(${t.plannedStart} is null and ${t.plannedEnd} is null) or (${t.plannedStart} is not null and ${t.plannedEnd} is not null and ${t.plannedEnd} >= ${t.plannedStart})`),
   index("production_projects_manager_idx").on(t.managerId)]);

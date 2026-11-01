@@ -127,7 +127,7 @@ async function currentUser(token: string | undefined) {
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type NotificationChange = NonNullable<NotificationPayload["changes"]>[number];
-const notificationFields: Record<string, string> = { name: "Назва", managerId: "Менеджер", workTypeId: "Тип робіт", address: "Адреса", gps: "GPS", volume: "Обсяг робіт", information: "Коментар", desiredStart: "Бажаний початок", desiredEnd: "Бажане завершення", plannedStart: "Плановий початок", plannedEnd: "Планове завершення", employees: "Бригада", responsible: "Відповідальний", vehicles: "Автомобілі" };
+const notificationFields: Record<string, string> = { name: "Назва", managerId: "Менеджер", workTypeId: "Тип робіт", address: "Адреса", locationUrl: "Локація", volume: "Обсяг робіт", information: "Коментар", desiredStart: "Бажаний початок", desiredEnd: "Бажане завершення", plannedStart: "Плановий початок", plannedEnd: "Планове завершення", employees: "Бригада", responsible: "Відповідальний", vehicles: "Автомобілі" };
 async function describeChanges(tx: Transaction, changes: { field: string; before: string | null; after: string | null }[]): Promise<NotificationChange[]> {
   const userIds = new Set<string>(), vehicleIds = new Set<string>(), typeIds = new Set<string>();
   for (const change of changes) {
@@ -334,13 +334,14 @@ app.patch("/api/:kind/:id", async (request, reply) => {
 });
 
 const dateValue = z.iso.date();
+const locationUrl = z.url().refine((value) => value.startsWith("https://") || value.startsWith("http://"), "Некоректне посилання на мапу.");
 const projectFields = z.object({
   name: z.string().trim().min(1), managerId: z.string().uuid().optional(), workTypeId: z.string().uuid(),
-  address: z.string().trim().nullable().optional(), gps: z.string().trim().nullable().optional(),
+  address: z.string().trim().min(1), locationUrl: locationUrl.nullable().optional(),
   volume: z.string().trim().nullable().optional(), information: z.string().trim().nullable().optional(),
   desiredStart: dateValue.nullable().optional(), desiredEnd: dateValue.nullable().optional(),
 }).strict();
-const validProject = (value: { address?: string | null; gps?: string | null; desiredStart?: string | null; desiredEnd?: string | null }) => Boolean(value.address || value.gps) && ((!value.desiredStart && !value.desiredEnd) || Boolean(value.desiredStart && value.desiredEnd && value.desiredStart <= value.desiredEnd));
+const validProject = (value: { address?: string | null; desiredStart?: string | null; desiredEnd?: string | null }) => Boolean(value.address) && ((!value.desiredStart && !value.desiredEnd) || Boolean(value.desiredStart && value.desiredEnd && value.desiredStart <= value.desiredEnd));
 const projectInput = projectFields.refine((value) => validProject(value) && Boolean(value.desiredStart && value.desiredEnd && value.volume));
 const statusSql = sql<string>`case when ${projects.plannedStart} is null then 'NEW' when ${projects.plannedStart} > current_date then 'PLANNED' when ${projects.plannedEnd} >= current_date then 'IN_PROGRESS' else 'COMPLETED' end`;
 
@@ -518,7 +519,7 @@ app.patch("/api/projects/:id", async (request, reply) => {
       if (!workType?.active) return reply.code(400).send({ error: "Оберіть активний тип робіт." });
     }
     const [updated] = await tx.update(projects).set({ ...changes, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, old.id)).returning();
-    const changed = (["name", "managerId", "workTypeId", "address", "gps", "volume", "information", "desiredStart", "desiredEnd"] as const).filter((field) => old[field] !== updated[field]).map((field) => ({ field, before: old[field], after: updated[field] }));
+    const changed = (["name", "managerId", "workTypeId", "address", "locationUrl", "volume", "information", "desiredStart", "desiredEnd"] as const).filter((field) => old[field] !== updated[field]).map((field) => ({ field, before: old[field], after: updated[field] }));
     for (const change of changed) await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: old.id, action: "UPDATE", field: change.field, oldValue: change.before, newValue: change.after });
     if (changed.length) await notifyProject(tx, actor, updated, "changed", await describeChanges(tx, changed));
     return updated;

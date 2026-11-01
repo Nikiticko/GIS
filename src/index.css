@@ -310,6 +310,8 @@ button:disabled { cursor: not-allowed; }
 .complete-button:hover { background: #1a7458; }
 .form-stack { display: flex; flex-direction: column; gap: 13px; }
 .field { display: flex; flex: 1; flex-direction: column; gap: 6px; }
+.location-url-row { display: flex; gap: 8px; }
+.location-url-row > input { min-width: 0; flex: 1; }
 .field label { color: #5d7082; font-size: 10px; font-weight: 600; }
 .field input, .field select, .field textarea { border-color: #dfe7ee; border-radius: 7px; font-size: 11px; }
 .field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible { border-color: #8caac7; box-shadow: 0 0 0 3px #8caac71c; }
