@@ -312,6 +312,13 @@ button:disabled { cursor: not-allowed; }
 .field { display: flex; flex: 1; flex-direction: column; gap: 6px; }
 .location-url-row { display: flex; gap: 8px; }
 .location-url-row > input { min-width: 0; flex: 1; }
+.date-input-row { position: relative; display: flex; min-width: 0; gap: 7px; }
+.date-input-row > input:first-child { min-width: 0; flex: 1; }
+.date-picker-button { display: grid; width: 37px; min-width: 37px; height: 37px; place-items: center; padding: 0; border: 1px solid #dfe7ee; border-radius: 7px; color: #60788d; background: #fff; cursor: pointer; }
+.date-picker-button:hover { border-color: #b9c9d6; background: #f7fafc; }
+.date-picker-button:focus-visible { outline: 0; border-color: #8caac7; box-shadow: 0 0 0 3px #8caac71c; }
+.date-picker-button:disabled { opacity: .5; cursor: not-allowed; }
+.date-picker-native { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 .field label { color: #5d7082; font-size: 10px; font-weight: 600; }
 .field input, .field select, .field textarea { border-color: #dfe7ee; border-radius: 7px; font-size: 11px; }
 .field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible { border-color: #8caac7; box-shadow: 0 0 0 3px #8caac71c; }
