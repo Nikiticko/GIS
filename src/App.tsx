@@ -49,6 +49,18 @@ export default function App() {
     setConnectionError("");
   }, []);
   const reset = useCallback(() => { sessionIdentity.current = null; setUser(null); setData(initialData); setDetail(null); setModal(null); setConnectionError(""); }, []);
+  const loadNotifications = useCallback(async () => {
+    const current = sessionIdentity.current;
+    if (!current) return;
+    try {
+      const notifications = await api.notifications();
+      if (sessionIdentity.current?.id === current.id && sessionIdentity.current.role === current.role) setData((previous) => ({ ...previous, notifications }));
+    } catch (error) {
+      if (sessionIdentity.current?.id !== current.id || sessionIdentity.current.role !== current.role) return;
+      if (error instanceof ApiError && error.status === 401) reset();
+      else setConnectionError(errorMessage(error));
+    }
+  }, [reset]);
   const loadSession = useCallback(async () => {
     try {
       const current = await api.me();
@@ -71,6 +83,11 @@ export default function App() {
     document.addEventListener("visibilitychange", visible);
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
   }, [Boolean(user), loadSession]);
+  useEffect(() => {
+    if (!user) return;
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void loadNotifications(); }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [user?.id, user?.role, loadNotifications]);
   async function reload() {
     if (!user) return;
     try { await refresh(user); }
@@ -123,6 +140,7 @@ export default function App() {
     event.preventDefault();
     if (window.location.pathname !== paths[target]) window.history.pushState(null, "", paths[target]);
     setScreen(target); setModal(null); setDetail(null);
+    if (target === "notifications") void loadNotifications();
   }
   if (checking) return <div className="empty-state">Завантаження…</div>;
   if (!user) return connectionError ? <div className="login-page"><div className="login-card"><p role="alert">{connectionError}</p><Button onClick={() => void loadSession()}>Спробувати ще раз</Button></div></div> : <LoginView onLogin={(current) => { sessionIdentity.current = current; setUser(current); void refresh(current).catch((error) => setConnectionError(errorMessage(error))); }} />;

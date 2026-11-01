@@ -148,7 +148,6 @@ async function describeChanges(tx: Transaction, changes: { field: string; before
 async function notifyProject(tx: Transaction, actor: { id: string; name: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = [], previousWorkers: string[] = []) {
   if (actor.role === "ADMIN") return;
   const planned = Boolean(project.plannedStart);
-  if (actor.role === "PRODUCTION_HEAD" && event === "changed" && !planned) return;
   const assigned = await tx.select({ id: users.id, name: users.name }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, project.id));
   const heads = actor.role === "MANAGER" ? await tx.select({ id: users.id }).from(users).where(and(eq(users.role, "PRODUCTION_HEAD"), eq(users.active, true))) : [];
   const recipients = new Set<string>();

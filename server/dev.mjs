@@ -73,7 +73,7 @@ try {
 }
 
 if (!stopping) {
-  api = start(process.execPath, ["--import", "tsx", resolve(root, "server/index.ts")]);
+  api = start(process.execPath, ["--watch", "--import", "tsx", resolve(root, "server/index.ts")]);
   api.once("error", () => { console.error("Не вдалося запустити API."); process.exitCode = 1; stop(); });
   api.once("exit", (code) => {
     if (!stopping) {
