@@ -34,6 +34,10 @@ app.setErrorHandler((error, request, reply) => {
   request.log.error({ statusCode: code, errorCode }, "Помилка обробки запиту");
   return reply.code(code).send({ error: error instanceof SessionExpired ? "Сесію завершено." : code === 413 ? "Файл перевищує допустимий розмір." : code < 500 ? "Некоректний запит." : "Не вдалося виконати запит." });
 });
+app.addHook("onSend", async (_request, reply, payload) => {
+  reply.header("Cache-Control", "no-store");
+  return payload;
+});
 app.addHook("onResponse", async (request, reply) => {
   const details = { method: request.method, route: request.routeOptions.url || "невідомий маршрут", statusCode: reply.statusCode, durationMs: Math.round(reply.elapsedTime) };
   if (reply.statusCode >= 500) request.log.error(details, "Запит завершено з помилкою сервера");
@@ -118,7 +122,10 @@ async function requireAdmin(request: import("fastify").FastifyRequest, reply: im
 app.get("/api/users", async (request, reply) => {
   const actor = await requireAdmin(request, reply);
   if (!actor) return;
-  return db.select().from(users);
+  return db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    return tx.select().from(users);
+  });
 });
 
 app.post("/api/users", async (request, reply) => {
@@ -474,7 +481,10 @@ app.post("/api/notifications/:id/read", async (request, reply) => {
 app.get("/api/audit", async (request, reply) => {
   const actor = await requireAdmin(request, reply);
   if (!actor) return;
-  return db.select().from(audit).orderBy(sql`${audit.createdAt} desc`);
+  return db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    return tx.select().from(audit).orderBy(sql`${audit.createdAt} desc`);
+  });
 });
 
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() });
