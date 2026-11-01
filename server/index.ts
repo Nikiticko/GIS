@@ -4,6 +4,8 @@ import multipart from "@fastify/multipart";
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { Transform } from "node:stream";
+import { closeSync, mkdirSync, openSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -11,17 +13,32 @@ import pg from "pg";
 import { z } from "zod";
 import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, users, vehicles, workTypes } from "./schema.js";
 
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error("DATABASE_URL is required");
-const pool = new pg.Pool({ connectionString });
-const db = drizzle(pool);
+const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
+mkdirSync(dirname(logFile), { recursive: true, mode: 0o700 });
+closeSync(openSync(logFile, "a", 0o600));
 class SessionExpired extends Error { statusCode = 401; }
-const app = Fastify({ logger: true, trustProxy: process.env.TRUST_PROXY || false });
+const app = Fastify({ logger: { level: "info", file: logFile }, logController: new Fastify.LogController({ disableRequestLogging: true }), trustProxy: process.env.TRUST_PROXY || false });
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  app.log.fatal("Не задано DATABASE_URL");
+  process.stderr.write("Не задано DATABASE_URL. Налаштуйте підключення до PostgreSQL.\n");
+  process.exitCode = 1;
+} else {
+const pool = new pg.Pool({ connectionString, connectionTimeoutMillis: 5000 });
+const db = drizzle(pool);
 app.setErrorHandler((error, request, reply) => {
   const status = (error as { statusCode?: number }).statusCode;
   const code = status && status >= 400 && status < 500 ? status : 500;
-  request.log.error({ statusCode: code }, "Помилка обробки запиту");
+  const rawCode = (error as { code?: unknown }).code;
+  const errorCode = typeof rawCode === "string" && /^[A-Z0-9_]{1,50}$/.test(rawCode) ? rawCode : undefined;
+  request.log.error({ statusCode: code, errorCode }, "Помилка обробки запиту");
   return reply.code(code).send({ error: error instanceof SessionExpired ? "Сесію завершено." : code === 413 ? "Файл перевищує допустимий розмір." : code < 500 ? "Некоректний запит." : "Не вдалося виконати запит." });
+});
+app.addHook("onResponse", async (request, reply) => {
+  const details = { method: request.method, route: request.routeOptions.url || "невідомий маршрут", statusCode: reply.statusCode, durationMs: Math.round(reply.elapsedTime) };
+  if (reply.statusCode >= 500) request.log.error(details, "Запит завершено з помилкою сервера");
+  else if (reply.statusCode >= 400) request.log.warn(details, "Запит відхилено");
+  else request.log.info(details, "Запит виконано");
 });
 await app.register(cookie);
 await app.register(multipart, { limits: { files: 1, fileSize: 2_147_483_647 } });
@@ -586,4 +603,42 @@ const cleanupTimer = setInterval(() => {
 }, 60_000);
 app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; storage?.destroy(); await pool.end(); });
 void scheduleCleanup();
-await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
+async function shutdown(signal: string) {
+  app.log.info({ signal }, "Зупинка сервера");
+  try {
+    await app.close();
+    app.log.info("Сервер зупинено");
+  } catch {
+    app.log.error("Не вдалося коректно зупинити сервер");
+    process.exitCode = 1;
+  } finally {
+    const logger = app.log as typeof app.log & { flush: (callback: (error?: Error) => void) => void };
+    await new Promise<void>((done) => logger.flush((error) => {
+      if (error) { process.stderr.write("Не вдалося записати журнал сервера.\n"); process.exitCode = 1; }
+      done();
+    }));
+  }
+}
+process.once("SIGINT", () => { void shutdown("SIGINT"); });
+process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
+let startupStage: "database" | "schema" | "server" = "database";
+try {
+  await pool.query("select 1");
+  startupStage = "schema";
+  await pool.query("select key_code from users limit 0");
+  await pool.query("select subject_user_id from notifications limit 0");
+  await pool.query("select storage_deleted_at from attachments limit 0");
+  startupStage = "server";
+  await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
+  app.log.info("Сервер запущено");
+} catch (error) {
+  const rawCode = (error as { code?: unknown }).code;
+  const errorCode = typeof rawCode === "string" && /^[A-Z0-9_]{1,50}$/.test(rawCode) ? rawCode : undefined;
+  app.log.fatal({ startupStage, errorCode }, "Не вдалося запустити сервер");
+  const message = startupStage === "database" ? "Не вдалося підключитися до PostgreSQL. Перевірте DATABASE_URL і доступність бази." : startupStage === "schema" ? (errorCode === "42P01" || errorCode === "42703" ? "База не підготовлена. Виконайте npm run db:migrate." : "Не вдалося перевірити схему бази. Перевірте доступ до неї та журнал API.") : "Не вдалося запустити API. Перевірте доступність порту.";
+  process.stderr.write(`${message}\n`);
+  await shutdown("startup-error");
+  process.exitCode = 1;
+}
+
+}

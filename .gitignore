@@ -6,3 +6,5 @@ dist/
 *.tsbuildinfo
 *.md 
 dist-api/
+logs/
+.local/
