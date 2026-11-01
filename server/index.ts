@@ -631,7 +631,10 @@ app.get("/api/projects/:id/attachments/:attachmentId", async (request, reply) =>
   if (!await attachmentAccess(params.data.id, actor, false)) return reply.code(403).send({ error: "Недостатньо прав." });
   const [item] = await db.select().from(attachments).where(and(eq(attachments.id, params.data.attachmentId), eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt)));
   if (!item) return reply.code(404).send({ error: "Файл не знайдено." });
-  reply.header("Content-Type", "application/octet-stream").header("X-Content-Type-Options", "nosniff").header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}`);
+  const previewTypes = new Set(["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "text/plain", "text/csv"]);
+  const contentType = previewTypes.has(item.contentType.toLowerCase()) ? item.contentType.toLowerCase() : "application/octet-stream";
+  const disposition = contentType === "application/octet-stream" ? "attachment" : "inline";
+  reply.header("Content-Type", contentType).header("X-Content-Type-Options", "nosniff").header("Content-Disposition", `${disposition}; filename*=UTF-8''${encodeURIComponent(item.name)}`);
   if (item.storageKey.startsWith("local/")) return reply.send(createReadStream(localAttachmentPath(item.storageKey)));
   if (!storage || !bucket) return reply.code(503).send({ error: "Попереднє сховище файлів не налаштовано." });
   const object = await storage.send(new GetObjectCommand({ Bucket: bucket, Key: item.storageKey }));
