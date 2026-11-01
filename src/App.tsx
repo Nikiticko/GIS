@@ -34,6 +34,7 @@ export default function App() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [modal, setModal] = useState<"create" | "detail" | "edit" | "plan" | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const refresh = useCallback(async (current: CurrentUser) => {
     const admin = current.role === "ADMIN", head = current.role === "PRODUCTION_HEAD", employee = current.role === "PRODUCTION_EMPLOYEE";
@@ -86,17 +87,34 @@ export default function App() {
   async function openProject(id: string) {
     await perform(async () => { const [project, files] = await Promise.all([api.project(id), api.attachments(id)]); setDetail(project); setAttachments(files); setModal("detail"); });
   }
-  async function saveProject(values: ProjectValues) {
+  async function uploadFiles(projectId: string, files: File[]) {
+    const failed: string[] = [];
+    if (!files.length) return failed;
+    setUploading(true);
+    try { for (const file of files) {
+      try { await api.upload(projectId, file); } catch { failed.push(file.name); }
+    } } finally { setUploading(false); }
+    return failed;
+  }
+  function reportFailedUploads(failed: string[]) {
+    if (failed.length) setConnectionError(`Об’єкт збережено, але не вдалося завантажити файли: ${failed.join(", ")}. Додайте їх у картці об’єкта.`);
+  }
+  async function saveProject(values: ProjectValues, files: File[]) {
     if (!user) return;
+    let failed: string[] = [];
     if (modal === "edit" && detail) {
       const changes: Partial<ProjectValues> = {};
       for (const key of Object.keys(values) as (keyof ProjectValues)[]) {
         if (values[key] !== detail.project[key]) Object.assign(changes, { [key]: values[key] });
       }
       if (Object.keys(changes).length) await api.updateProject(detail.project.id, { ...changes, expectedUpdatedAt: detail.project.updatedAt });
-    } else await api.createProject(values);
+    } else {
+      const project = await api.createProject(values);
+      failed = await uploadFiles(project.id, files);
+    }
     setModal(null); setDetail(null);
     await refreshAfterWrite("Зміни збережено.", () => refresh(user));
+    reportFailedUploads(failed);
   }
   async function refreshDetail(id: string) { const [project, files] = await Promise.all([api.project(id), api.attachments(id)]); setDetail(project); setAttachments(files); }
   async function logout() { await perform(async () => { await api.logout(); reset(); }); }
@@ -136,11 +154,11 @@ export default function App() {
         {effectiveScreen === "notifications" && <section className="page-stack"><div className="page-heading"><h1>Сповіщення</h1></div><div className="production-list">{data.notifications.map((notice) => <article className="production-panel production-row" key={notice.id}><div><strong>{notificationLabels[notice.type] ?? "Системне сповіщення"}{notice.subjectName ? `: ${notice.subjectName}` : notice.projectName ? `: ${notice.projectName}` : ""}</strong><p>{new Date(notice.createdAt).toLocaleString("uk-UA")} · {notice.readAt ? "Прочитано" : "Нове"}</p></div><div className="production-actions">{notice.projectId && notice.type !== "EMPLOYEE_REMOVED" && <Button variant="outline" onClick={() => void openProject(notice.projectId!)}>Відкрити об’єкт</Button>}{!notice.readAt && <Button variant="outline" onClick={() => void perform(async () => { await api.markRead(notice.id); await reload(); })}>Позначити прочитаним</Button>}</div></article>)}{!data.notifications.length && <p>Сповіщень поки немає.</p>}</div></section>}
       </div></main>
     </div>
-    <Dialog open={modal !== null} onOpenChange={(open) => { if (!open) setModal(null); }}><DialogContent className="modal-content production-modal">
+    <Dialog open={modal !== null} onOpenChange={(open) => { if (!open && !uploading) setModal(null); }}><DialogContent className="modal-content production-modal">
       {connectionError && <p className="form-error" role="alert">{connectionError}</p>}
       {modal === "create" && <><DialogHeader><DialogTitle>Новий об’єкт</DialogTitle><DialogDescription>Об’єкт одразу стане доступним керівнику виробництва.</DialogDescription></DialogHeader><ProductionProjectForm workTypes={data.workTypes} managers={data.users} isAdmin={admin} onSave={saveProject} onCancel={() => setModal(null)} /></>}
       {modal === "edit" && detail && <><DialogHeader><DialogTitle>Редагування об’єкта</DialogTitle><DialogDescription>{detail.project.name}</DialogDescription></DialogHeader><ProductionProjectForm key={detail.project.id} initial={detail.project} isManager={manager} isAdmin={admin} workTypes={data.workTypes} managers={data.users} onSave={saveProject} onCancel={() => setModal("detail")} /></>}
-      {modal === "plan" && detail && <><DialogHeader><DialogTitle>Планування об’єкта</DialogTitle><DialogDescription>{detail.project.name}</DialogDescription></DialogHeader><ProductionPlanForm key={detail.project.id} detail={detail} employees={data.employees} vehicles={data.vehicles} onSaved={() => { setModal(null); void perform(() => refreshAfterWrite("План збережено.", reload)); }} onCancel={() => setModal("detail")} /></>}
+      {modal === "plan" && detail && <><DialogHeader><DialogTitle>Планування об’єкта</DialogTitle><DialogDescription>{detail.project.name}</DialogDescription></DialogHeader><ProductionPlanForm key={detail.project.id} detail={detail} employees={data.employees} vehicles={data.vehicles} onSaved={async (files) => { const failed = await uploadFiles(detail.project.id, files); setModal(null); await refreshAfterWrite("План збережено.", reload); reportFailedUploads(failed); }} onCancel={() => setModal("detail")} /></>}
       {modal === "detail" && detail && <><DialogHeader><DialogTitle>{detail.project.name}</DialogTitle><DialogDescription>{statuses[detail.status]} · {detail.workTypeName}</DialogDescription></DialogHeader><div className="form-stack">
         <div className="production-detail-grid"><div><span>Адреса</span><strong>{detail.project.address || "Не вказано"}</strong></div><div><span>GPS</span><strong>{detail.project.gps || "Не вказано"}</strong></div><div><span>Менеджер</span><strong>{detail.managerName}</strong></div><div><span>Обсяг робіт</span><strong>{detail.project.volume || "Не вказано"}</strong></div><div><span>Бажані дати</span><strong>{period(detail.project.desiredStart, detail.project.desiredEnd)}</strong></div><div><span>Планові дати</span><strong>{period(detail.project.plannedStart, detail.project.plannedEnd)}</strong></div><div><span>Команда</span><strong>{detail.team.map((person) => `${person.name}${person.responsible ? " (відповідальний)" : ""}`).join(", ") || "Не призначена"}</strong></div><div><span>Автомобілі</span><strong>{detail.vehicles.map((vehicle) => `${vehicle.name} (${vehicle.registration})`).join(", ") || "Не призначені"}</strong></div><div><span>Додаткова інформація</span><strong>{detail.project.information || "Не вказано"}</strong></div></div>
         <div className="field"><strong>Вкладення</strong>{attachments.map((file) => <div className="production-row" key={file.id}><a href={api.attachmentUrl(detail.project.id, file.id)}>{file.name}</a>{canEdit && (admin || file.uploaderId === user.id) && <Button variant="outline" disabled={busy} onClick={() => void perform(async () => { await api.deleteAttachment(detail.project.id, file.id); await refreshAfterWrite("Файл видалено.", () => refreshDetail(detail.project.id)); })}>Видалити</Button>}</div>)}{!attachments.length && <p>Файлів немає.</p>}{canEdit && <label>Додати файл<Input type="file" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void perform(async () => { await api.upload(detail.project.id, file); await refreshAfterWrite("Файл додано.", () => refreshDetail(detail.project.id)); }); }} /></label>}</div>

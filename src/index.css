@@ -552,6 +552,7 @@ button:disabled { cursor: not-allowed; }
 .production-layout { display: flex; min-height: calc(100vh - 70px); }
 .production-nav { width: 210px; flex: 0 0 210px; padding: 20px 10px; display: flex; flex-direction: column; gap: 3px; background: #fff; border-right: 1px solid var(--line); }
 .production-nav .nav-link { width: 100%; text-align: left; }
+.resource-busy { display: block; margin-left: 1.4rem; color: #a85615; font-size: 0.85em; }
 .production-list { display: flex; flex-direction: column; gap: 12px; }
 .production-panel { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 18px; }
 .production-panel h2 { font-size: 16px; font-weight: 650; }

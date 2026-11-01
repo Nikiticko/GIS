@@ -22,7 +22,9 @@ export interface Notification { id: string; type: string; projectId: string | nu
 export interface AuditEntry { id: string; actorId: string; entityType: string; entityId: string; action: string; field: string | null; oldValue: string | null; newValue: string | null; createdAt: string }
 export interface Conflict { resourceId: string; resourceName: string; projectId: string; projectName: string; overlapStart: string; overlapEnd: string }
 export interface Conflicts { employees: Conflict[]; vehicles: Conflict[] }
-export interface Plan { start: string; end: string; employeeIds: string[]; responsibleId: string; vehicleIds: string[]; confirmConflicts: boolean; expectedUpdatedAt: string }
+export interface Plan { start: string; end: string; employeeIds: string[]; responsibleId: string; vehicleIds: string[]; confirmConflicts: boolean; expectedUpdatedAt: string; information?: string | null }
+export interface Availability { employees: BusyResource[]; vehicles: BusyResource[] }
+interface BusyResource { resourceId: string; projectId: string; projectName: string; start: string; end: string }
 export type ProjectValues = Pick<Project, "name" | "workTypeId" | "address" | "gps" | "volume" | "information" | "desiredStart" | "desiredEnd"> & { managerId?: string };
 
 export class ApiError extends Error {
@@ -67,6 +69,7 @@ export const api = {
   updateProject: (id: string, values: Partial<ProjectValues> & { expectedUpdatedAt?: string }) => request<Project>(`/projects/${id}`, json("PATCH", values)),
   archiveProject: (id: string) => request<{ ok: boolean }>(`/projects/${id}/archive`, { method: "POST" }),
   savePlan: (id: string, plan: Plan) => request<{ ok: boolean; conflicts: Conflicts }>(`/projects/${id}/planning`, json("PUT", plan)),
+  availability: (id: string, start: string, end: string) => request<Availability>(`/projects/${id}/availability?${new URLSearchParams({ start, end })}`),
   attachments: (id: string) => request<Attachment[]>(`/projects/${id}/attachments`),
   upload: (id: string, file: File) => { const form = new FormData(); form.append("file", file); return request<Attachment>(`/projects/${id}/attachments`, { method: "POST", body: form }); },
   attachmentUrl: (id: string, fileId: string) => `/api/projects/${id}/attachments/${fileId}`,

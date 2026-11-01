@@ -10,12 +10,13 @@ const empty: Values = { name: "", managerId: "", workTypeId: "", address: "", gp
 
 export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, isManager, onSave, onCancel }: {
   workTypes: WorkType[]; managers: User[]; isAdmin: boolean; initial?: Project; isManager?: boolean;
-  onSave: (values: ProjectValues) => Promise<void>; onCancel: () => void;
+  onSave: (values: ProjectValues, files: File[]) => Promise<void>; onCancel: () => void;
 }) {
   const [values, setValues] = useState<Values>(() => initial ? { name: initial.name, managerId: initial.managerId, workTypeId: initial.workTypeId, address: initial.address ?? "", gps: initial.gps ?? "", volume: initial.volume ?? "", information: initial.information ?? "", desiredStart: initial.desiredStart ?? "", desiredEnd: initial.desiredEnd ?? "" } : empty);
   const restricted = Boolean(initial?.plannedStart && isManager);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
   const change = (key: keyof Values, value: string) => setValues((current) => ({ ...current, [key]: value }));
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -24,7 +25,7 @@ export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, i
     if (Boolean(values.desiredStart) !== Boolean(values.desiredEnd) || (values.desiredStart && values.desiredEnd < values.desiredStart)) { setError("Вкажіть обидві бажані дати в правильному порядку."); return; }
     setSaving(true); setError("");
     try {
-      await onSave({ name: values.name.trim(), workTypeId: values.workTypeId, ...(isAdmin ? { managerId: values.managerId } : {}), address: values.address.trim() || null, gps: values.gps.trim() || null, volume: values.volume.trim() || null, information: values.information.trim() || null, desiredStart: values.desiredStart || null, desiredEnd: values.desiredEnd || null });
+      await onSave({ name: values.name.trim(), workTypeId: values.workTypeId, ...(isAdmin ? { managerId: values.managerId } : {}), address: values.address.trim() || null, gps: values.gps.trim() || null, volume: values.volume.trim() || null, information: values.information.trim() || null, desiredStart: values.desiredStart || null, desiredEnd: values.desiredEnd || null }, files);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Не вдалося зберегти об’єкт.");
     } finally { setSaving(false); }
@@ -35,9 +36,10 @@ export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, i
     <div className="field"><Label htmlFor="project-work-type">Тип робіт</Label><select id="project-work-type" className="form-select" value={values.workTypeId} disabled={restricted} onChange={(event) => change("workTypeId", event.target.value)} required><option value="">Оберіть тип робіт</option>{workTypes.filter((type) => type.active || type.id === initial?.workTypeId).map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></div>
     <div className="field"><Label htmlFor="project-address">Адреса</Label><Input id="project-address" value={values.address} onChange={(event) => change("address", event.target.value)} /></div>
     <div className="field"><Label htmlFor="project-gps">GPS-координати</Label><Input id="project-gps" value={values.gps} onChange={(event) => change("gps", event.target.value)} /></div>
-    <div className="field"><Label htmlFor="project-volume">Обсяг робіт</Label><Input id="project-volume" value={values.volume} onChange={(event) => change("volume", event.target.value)} /></div>
+    <div className="field"><Label htmlFor="project-volume">Обсяг робіт</Label><Input id="project-volume" required={!initial || Boolean(initial.volume)} value={values.volume} onChange={(event) => change("volume", event.target.value)} /></div>
     <div className="planning-dates"><div className="field"><Label htmlFor="desired-start">Бажаний початок</Label><Input id="desired-start" type="date" required={!initial || Boolean(initial.desiredStart)} disabled={restricted} value={values.desiredStart} onChange={(event) => change("desiredStart", event.target.value)} /></div><span className="date-arrow">—</span><div className="field"><Label htmlFor="desired-end">Бажане завершення</Label><Input id="desired-end" type="date" required={!initial || Boolean(initial.desiredEnd)} disabled={restricted} value={values.desiredEnd} onChange={(event) => change("desiredEnd", event.target.value)} /></div></div>
-    <div className="field"><Label htmlFor="project-info">Додаткова інформація</Label><Textarea id="project-info" value={values.information} onChange={(event) => change("information", event.target.value)} rows={3} /></div>
+    <div className="field"><Label htmlFor="project-info">Коментар (необов’язково)</Label><Textarea id="project-info" value={values.information} onChange={(event) => change("information", event.target.value)} rows={3} /></div>
+    {!initial && <div className="field"><Label htmlFor="project-files">Вкладення (необов’язково)</Label><Input id="project-files" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} /></div>}
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="modal-footer"><Button type="button" variant="outline" onClick={onCancel} disabled={saving}>Скасувати</Button><Button type="submit" className="primary-shadcn" disabled={saving}>{saving ? "Зберігаємо…" : (initial ? "Зберегти зміни" : "Створити об’єкт")}</Button></div>
   </form>;

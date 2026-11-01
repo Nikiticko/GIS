@@ -2,9 +2,10 @@ import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { Upload } from "@aws-sdk/lib-storage";
 import { Transform } from "node:stream";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, createReadStream, createWriteStream, mkdirSync, openSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { dirname, resolve } from "node:path";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, isNull, isNotNull, sql } from "drizzle-orm";
@@ -48,6 +49,17 @@ await app.register(cookie);
 await app.register(multipart, { limits: { files: 1, fileSize: 2_147_483_647 } });
 const bucket = process.env.S3_BUCKET;
 const storage = bucket ? new S3Client({ region: process.env.AWS_REGION || "us-east-1", endpoint: process.env.S3_ENDPOINT || undefined, forcePathStyle: true }) : null;
+const attachmentDir = resolve(process.env.ATTACHMENTS_DIR || ".local/attachments");
+function localAttachmentPath(key: string) {
+  const match = /^local\/([0-9a-f-]{36})\/([0-9a-f-]{36})$/i.exec(key);
+  if (!match) throw new Error("Некоректний ключ вкладення");
+  return resolve(attachmentDir, match[1], match[2]);
+}
+async function deleteStoredAttachment(key: string) {
+  if (key.startsWith("local/")) await rm(localAttachmentPath(key), { force: true });
+  else if (storage && bucket) await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  else throw new Error("Попереднє сховище файлів не налаштовано");
+}
 const sessionCookie = "gis_session";
 const secure = process.env.NODE_ENV === "production";
 const attempts = new Map<string, { count: number; until: number }>();
@@ -296,7 +308,7 @@ const projectFields = z.object({
   desiredStart: dateValue.nullable().optional(), desiredEnd: dateValue.nullable().optional(),
 }).strict();
 const validProject = (value: { address?: string | null; gps?: string | null; desiredStart?: string | null; desiredEnd?: string | null }) => Boolean(value.address || value.gps) && ((!value.desiredStart && !value.desiredEnd) || Boolean(value.desiredStart && value.desiredEnd && value.desiredStart <= value.desiredEnd));
-const projectInput = projectFields.refine((value) => validProject(value) && Boolean(value.desiredStart && value.desiredEnd));
+const projectInput = projectFields.refine((value) => validProject(value) && Boolean(value.desiredStart && value.desiredEnd && value.volume));
 const statusSql = sql<string>`case when ${projects.plannedStart} is null then 'NEW' when ${projects.plannedStart} > current_date then 'PLANNED' when ${projects.plannedEnd} >= current_date then 'IN_PROGRESS' else 'COMPLETED' end`;
 
 app.post("/api/projects", async (request, reply) => {
@@ -360,8 +372,25 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
 
 const planningInput = z.object({
   start: dateValue, end: dateValue, employeeIds: z.array(z.string().uuid()).min(1), responsibleId: z.string().uuid(),
-  vehicleIds: z.array(z.string().uuid()), confirmConflicts: z.boolean().default(false), expectedUpdatedAt: z.iso.datetime({ offset: true }).optional(),
+  vehicleIds: z.array(z.string().uuid()), confirmConflicts: z.boolean().default(false), expectedUpdatedAt: z.iso.datetime({ offset: true }).optional(), information: z.string().trim().max(10000).nullable().optional(),
 }).strict().refine((v) => v.start <= v.end && new Set(v.employeeIds).size === v.employeeIds.length && new Set(v.vehicleIds).size === v.vehicleIds.length && v.employeeIds.includes(v.responsibleId));
+
+app.get("/api/projects/:id/availability", async (request, reply) => {
+  const actor = await currentUser(request.cookies[sessionCookie]);
+  if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
+  if (actor.role !== "ADMIN" && actor.role !== "PRODUCTION_HEAD") return reply.code(403).send({ error: "Недостатньо прав." });
+  const params = uuidParam.safeParse(request.params);
+  const query = z.object({ start: dateValue, end: dateValue }).strict().refine((value) => value.start <= value.end).safeParse(request.query);
+  if (!params.success || !query.success) return reply.code(400).send({ error: "Некоректні дати." });
+  const [project] = await db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, params.data.id), isNull(projects.archivedAt)));
+  if (!project) return reply.code(404).send({ error: "Об’єкт не знайдено." });
+  const overlap = and(sql`${projects.id} <> ${project.id}`, isNull(projects.archivedAt), sql`${projects.plannedStart} <= ${query.data.end}`, sql`${projects.plannedEnd} >= ${query.data.start}`);
+  const [employeesBusy, vehiclesBusy] = await Promise.all([
+    db.select({ resourceId: assignments.userId, projectId: projects.id, projectName: projects.name, start: projects.plannedStart, end: projects.plannedEnd }).from(assignments).innerJoin(projects, eq(assignments.projectId, projects.id)).where(overlap),
+    db.select({ resourceId: projectVehicles.vehicleId, projectId: projects.id, projectName: projects.name, start: projects.plannedStart, end: projects.plannedEnd }).from(projectVehicles).innerJoin(projects, eq(projectVehicles.projectId, projects.id)).where(overlap),
+  ]);
+  return { employees: employeesBusy, vehicles: vehiclesBusy };
+});
 
 app.put("/api/projects/:id/planning", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
@@ -389,7 +418,7 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     const intersect = <T extends { start: string | null; end: string | null }>(item: T) => ({ ...item, overlapStart: item.start && item.start > plan.start ? item.start : plan.start, overlapEnd: item.end && item.end < plan.end ? item.end : plan.end });
     const conflicts = { employees: employeeConflicts.map(intersect), vehicles: vehicleConflicts.map(intersect) };
     if (!plan.confirmConflicts && (employeeConflicts.length || vehicleConflicts.length)) return reply.code(409).send({ error: "Виявлено перетин призначень.", conflicts });
-    await tx.update(projects).set({ plannedStart: plan.start, plannedEnd: plan.end, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id));
+    await tx.update(projects).set({ plannedStart: plan.start, plannedEnd: plan.end, ...(plan.information !== undefined ? { information: plan.information } : {}), updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id));
     await tx.delete(assignments).where(eq(assignments.projectId, project.id));
     await tx.insert(assignments).values(plan.employeeIds.map((userId) => ({ projectId: project.id, userId, responsible: userId === plan.responsibleId })));
     await tx.delete(projectVehicles).where(eq(projectVehicles.projectId, project.id));
@@ -397,6 +426,7 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     const oldResponsible = oldAssignments.find((item) => item.responsible)?.userId ?? null;
     const changes = [
       { field: "plannedStart", before: project.plannedStart, after: plan.start }, { field: "plannedEnd", before: project.plannedEnd, after: plan.end },
+      { field: "information", before: project.information, after: plan.information === undefined ? project.information : plan.information },
       { field: "employees", before: oldAssignments.map((item) => item.userId).sort().join(","), after: [...plan.employeeIds].sort().join(",") },
       { field: "responsible", before: oldResponsible, after: plan.responsibleId },
       { field: "vehicles", before: oldVehicles.map((item) => item.vehicleId).sort().join(","), after: [...plan.vehicleIds].sort().join(",") },
@@ -446,6 +476,7 @@ app.patch("/api/projects/:id", async (request, reply) => {
     if (changes.managerId && changes.managerId !== old.managerId && actor.role !== "ADMIN") return reply.code(403).send({ error: "Змінити менеджера може лише адміністратор." });
     if (actor.role === "MANAGER" && old.plannedStart && ((changes.workTypeId && changes.workTypeId !== old.workTypeId) || (changes.desiredStart !== undefined && changes.desiredStart !== old.desiredStart) || (changes.desiredEnd !== undefined && changes.desiredEnd !== old.desiredEnd))) return reply.code(403).send({ error: "Ці дані змінює керівник виробництва." });
     const next = { ...old, ...changes };
+    if (changes.volume !== undefined && !changes.volume) return reply.code(400).send({ error: "Обсяг робіт обов’язковий." });
     if (!validProject(next)) return reply.code(400).send({ error: "Вкажіть локацію та коректну пару бажаних дат." });
     if ((changes.desiredStart !== undefined || changes.desiredEnd !== undefined) && (!next.desiredStart || !next.desiredEnd)) return reply.code(400).send({ error: "Бажані дати початку та завершення обов’язкові." });
     if (next.managerId !== old.managerId) {
@@ -528,16 +559,15 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
   const params = uuidParam.safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   if (!await attachmentAccess(params.data.id, actor, true)) return reply.code(403).send({ error: "Недостатньо прав." });
-  if (!storage || !bucket) return reply.code(503).send({ error: "Сховище файлів не налаштовано." });
   const file = await request.file();
   if (!file || !file.filename.trim()) return reply.code(400).send({ error: "Оберіть файл." });
-  const key = `${params.data.id}/${randomUUID()}`;
+  const key = `local/${params.data.id}/${randomUUID()}`;
   let size = 0;
   const counter = new Transform({ transform(chunk: Buffer, _encoding, callback) { size += chunk.length; callback(null, chunk); } });
-  file.file.on("error", (error) => counter.destroy(error));
-  const upload = new Upload({ client: storage, params: { Bucket: bucket, Key: key, Body: file.file.pipe(counter), ContentType: file.mimetype } });
   try {
-    await upload.done();
+    const path = localAttachmentPath(key);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await pipeline(file.file, counter, createWriteStream(path, { flags: "wx", mode: 0o600 }));
     if (file.file.truncated) throw new Error("Файл перевищує допустимий розмір.");
     const refreshedActor = await currentUser(request.cookies[sessionCookie]);
     if (!refreshedActor || refreshedActor.id !== actor.id || !await attachmentAccess(params.data.id, refreshedActor, true)) throw new AttachmentAccessChanged();
@@ -552,7 +582,7 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
     return reply.code(201).send({ id: attachment.id, projectId: attachment.projectId, uploaderId: attachment.uploaderId, name: attachment.name, contentType: attachment.contentType, size: attachment.size, createdAt: attachment.createdAt });
   } catch (error) {
     try {
-      await storage.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      await deleteStoredAttachment(key);
     } catch {
       try {
         await db.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size, deletedAt: new Date() });
@@ -573,9 +603,10 @@ app.get("/api/projects/:id/attachments/:attachmentId", async (request, reply) =>
   if (!await attachmentAccess(params.data.id, actor, false)) return reply.code(403).send({ error: "Недостатньо прав." });
   const [item] = await db.select().from(attachments).where(and(eq(attachments.id, params.data.attachmentId), eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt)));
   if (!item) return reply.code(404).send({ error: "Файл не знайдено." });
-  if (!storage || !bucket) return reply.code(503).send({ error: "Сховище файлів не налаштовано." });
-  const object = await storage.send(new GetObjectCommand({ Bucket: bucket, Key: item.storageKey }));
   reply.header("Content-Type", "application/octet-stream").header("X-Content-Type-Options", "nosniff").header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}`);
+  if (item.storageKey.startsWith("local/")) return reply.send(createReadStream(localAttachmentPath(item.storageKey)));
+  if (!storage || !bucket) return reply.code(503).send({ error: "Попереднє сховище файлів не налаштовано." });
+  const object = await storage.send(new GetObjectCommand({ Bucket: bucket, Key: item.storageKey }));
   return reply.send(object.Body);
 });
 app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply) => {
@@ -584,7 +615,6 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
   const params = attachmentParams.safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   if (!await attachmentAccess(params.data.id, actor, true)) return reply.code(403).send({ error: "Недостатньо прав." });
-  if (!storage || !bucket) return reply.code(503).send({ error: "Сховище файлів не налаштовано." });
   const item = await db.transaction(async (tx) => {
     const sessionStatus = await sessionStillValid(tx, request.cookies[sessionCookie], actor);
     if (sessionStatus !== "ok") return sessionStatus;
@@ -606,10 +636,7 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
 
 let cleanupTask: Promise<void> | undefined;
 function scheduleCleanup() {
-  if (!storage || !bucket) return Promise.resolve();
   if (cleanupTask) return cleanupTask;
-  const client = storage;
-  const targetBucket = bucket;
   cleanupTask = (async () => {
     let after: string | undefined;
     for (;;) {
@@ -619,7 +646,7 @@ function scheduleCleanup() {
       if (!batch.length) break;
       for (const item of batch) {
         try {
-          await client.send(new DeleteObjectCommand({ Bucket: targetBucket, Key: item.key }));
+          await deleteStoredAttachment(item.key);
           await db.update(attachments).set({ storageDeletedAt: new Date() }).where(eq(attachments.id, item.id));
         } catch {
           app.log.error({ attachmentId: item.id }, "Не вдалося видалити файл зі сховища; буде повторна спроба");
