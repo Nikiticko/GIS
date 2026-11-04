@@ -7,6 +7,7 @@ import { ProductionPlanForm } from "@/components/ProductionPlanForm";
 import { ProductionAudit, ProductionDirectories, ProductionUsers } from "@/components/ProductionAdmin";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ProductionEmployeeSchedule } from "@/components/ProductionEmployeeSchedule";
 import { ProductionMonthCalendar } from "@/components/ProductionMonthCalendar";
 import { ProjectAttachments } from "@/components/ProjectAttachments";
 import { formatDate, formatDateTime } from "@/lib/date";
@@ -167,7 +168,7 @@ export default function App() {
         {!effectiveScreen && <section className="page-stack"><div className="page-heading"><h1>{screen ? "Доступ до сторінки обмежено" : "Сторінку не знайдено"}</h1></div><a href={paths.projects} onClick={(event) => navigate(event, "projects")}>Перейти до об’єктів</a></section>}
         {(effectiveScreen === "projects" || effectiveScreen === "archive") && <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{effectiveScreen === "archive" ? "Архів об’єктів" : manager || employee ? "Мої об’єкти" : "Об’єкти"}</h1></div>{effectiveScreen === "projects" && canCreate && <Button onClick={() => { setCreateDates(undefined); setModal("create"); }}><Plus data-icon="inline-start" />Новий об’єкт</Button>}</div><ProjectList rows={currentRows} open={openProject} /></section>}
         {effectiveScreen === "schedule" && <ProductionMonthCalendar rows={data.schedule} employee={employee} onSelectDates={canCreate ? (desiredStart, desiredEnd) => { setCreateDates({ desiredStart, desiredEnd }); setModal("create"); } : undefined} onOpen={(id) => void openProject(id)} />}
-        {effectiveScreen === "employees" && <section className="page-stack"><div className="page-heading"><h1>Працівники виробництва</h1></div><div className="production-list">{data.employees.map((person) => <div className="production-panel" key={person.id}><strong>{person.name}</strong><p>{person.phone || "Телефон не вказано"} · {person.active ? "Активний" : "Неактивний"}{person.foreman ? " · Бригадир" : ""}</p></div>)}</div></section>}
+        {effectiveScreen === "employees" && <ProductionEmployeeSchedule employees={data.employees} rows={data.schedule} onOpen={(id) => void openProject(id)} />}
         {effectiveScreen === "users" && admin && <ProductionUsers users={data.users} refresh={reload} />}
         {effectiveScreen === "directories" && admin && <ProductionDirectories workTypes={data.workTypes} vehicles={data.vehicles} refresh={reload} />}
         {effectiveScreen === "audit" && admin && <ProductionAudit entries={data.audit} users={data.users} projects={[...data.projects, ...data.archive]} workTypes={data.workTypes} vehicles={data.vehicles} />}
