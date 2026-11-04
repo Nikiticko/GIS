@@ -14,7 +14,8 @@ flock -w 3600 9 || { echo "Інша операція все ще виконує�
 mkdir -p "$release"
 tar -xf "$archive" -C "$release"
 rm -f "$archive"
-compose=(docker compose -p gis-calendar --project-directory "$release" --env-file "$root/.env" -f "$release/compose.yaml")"${compose[@]}" build
+compose=(docker compose -p gis-calendar --project-directory "$release" --env-file "$root/.env" -f "$release/compose.yaml")
+"${compose[@]}" build
 "${compose[@]}" up -d --wait db
 "${compose[@]}" stop api
 "${compose[@]}" run --rm -T api node dist-api/migrate.js
