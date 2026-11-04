@@ -4,6 +4,7 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build && npm run api:build
+RUN npm prune --omit=dev
 
 FROM node:22-alpine AS api
 WORKDIR /app

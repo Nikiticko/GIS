@@ -11,6 +11,8 @@ release="$root/releases/$revision"
 archive="/tmp/gis-calendar-$revision.tar"
 test -f "$root/.env" || { echo "Не налаштовано середовище на VPS" >&2; exit 1; }
 test -f "$archive"
+available_kb=$(df -Pk "$root" | awk 'NR == 2 {print $4}')
+(( available_kb >= 1048576 )) || { echo "Для розгортання потрібно щонайменше 1 ГіБ вільного місця" >&2; exit 1; }
 exec 9> /tmp/gis-calendar-operation.lock
 flock -w 3600 9 || { echo "Інша операція все ще виконується" >&2; exit 1; }
 mkdir -p "$release"
@@ -21,6 +23,10 @@ echo "Складання контейнерів"
 "${compose[@]}" build
 echo "Запуск PostgreSQL"
 "${compose[@]}" up -d --wait db
+echo "Перевірка резервної копії перед міграціями"
+if [[ "$("${compose[@]}" exec -T db psql -U gis -d gis -Atc "select to_regclass('public.users') is not null")" == t ]]; then
+  GIS_COMPOSE_FILE="$release/compose.yaml" GIS_BACKUP_REMOTE="${GIS_BACKUP_REMOTE:-gis-encrypted:backups}" GIS_OPERATION_LOCK_HELD=1 bash "$release/scripts/backup.sh"
+fi
 echo "Застосування міграцій"
 "${compose[@]}" stop api </dev/null
 "${compose[@]}" run --rm -T api node dist-api/migrate.js </dev/null

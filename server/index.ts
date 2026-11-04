@@ -4,10 +4,10 @@ import multipart from "@fastify/multipart";
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Transform } from "node:stream";
 import { closeSync, createReadStream, createWriteStream, mkdirSync, openSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, statfs, rename, readdir, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { dirname, resolve } from "node:path";
-import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -29,6 +29,13 @@ if (!connectionString) {
 } else {
 const pool = new pg.Pool({ connectionString, connectionTimeoutMillis: 5000 });
 const db = drizzle(pool);
+app.addHook("onRequest", async (request, reply) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
+  const origin = request.headers.origin;
+  if (request.headers["sec-fetch-site"] === "cross-site" || (origin && origin !== `${request.protocol}://${request.headers.host}`)) {
+    return reply.code(403).send({ error: "Запит з іншого сайту заборонено." });
+  }
+});
 app.setErrorHandler((error, request, reply) => {
   const status = (error as { statusCode?: number }).statusCode;
   const code = status && status >= 400 && status < 500 ? status : 500;
@@ -53,6 +60,7 @@ await app.register(multipart, { limits: { files: 1, fileSize: attachmentLimit } 
 const bucket = process.env.S3_BUCKET;
 const storage = bucket ? new S3Client({ region: process.env.AWS_REGION || "us-east-1", endpoint: process.env.S3_ENDPOINT || undefined, forcePathStyle: true }) : null;
 const attachmentDir = resolve(process.env.ATTACHMENTS_DIR || ".local/attachments");
+const pendingDir = resolve(attachmentDir, ".pending");
 function localAttachmentPath(key: string) {
   const match = /^local\/([0-9a-f-]{36})\/([0-9a-f-]{36})$/i.exec(key);
   if (!match) throw new Error("Некоректний ключ вкладення");
@@ -65,7 +73,12 @@ async function deleteStoredAttachment(key: string) {
 }
 const sessionCookie = "gis_session";
 const secure = process.env.NODE_ENV === "production";
-const attempts = new Map<string, { count: number; until: number }>();
+const sessionMaxAge = 365 * 24 * 60 * 60;
+const sessionId = (token: string) => `sha256:${createHash("sha256").update(token).digest("hex")}`;
+const validSession = (token: string | undefined): token is string => Boolean(token && /^[a-f0-9]{64}$/.test(token));
+const sessionAlive = sql`${sessions.createdAt} > now() - interval '365 days'`;
+const uploadingProjects = new Set<string>();
+let reservedUploadBytes = 0;
 
 app.get("/api/health", async (_request, reply) => {
   try {
@@ -77,16 +90,16 @@ app.get("/api/health", async (_request, reply) => {
 });
 
 app.post("/api/auth/login", async (request, reply) => {
-  const now = Date.now();
-  const attempt = attempts.get(request.ip);
-  if (attempt && attempt.until > now && attempt.count >= 10) return reply.code(429).send({ error: "Забагато спроб входу. Спробуйте пізніше." });
-  const current = attempt && attempt.until > now ? attempt : { count: 0, until: now + 15 * 60_000 };
-  current.count++;
-  attempts.set(request.ip, current);
-  function releaseAttempt() {
-    if (attempts.get(request.ip) !== current) return;
-    current.count--;
-    if (current.count === 0) attempts.delete(request.ip);
+  const attemptId = createHash("sha256").update(request.ip).digest("hex");
+  const { rows: [attempt] } = await pool.query<{ count: number; started_at: string }>(`
+    insert into login_attempts (id, count) values ($1, 1)
+    on conflict (id) do update set
+      count = case when login_attempts.started_at <= now() - interval '15 minutes' then 1 else least(login_attempts.count + 1, 11) end,
+      started_at = case when login_attempts.started_at <= now() - interval '15 minutes' then now() else login_attempts.started_at end
+    returning count, started_at::text`, [attemptId]);
+  if (attempt.count > 10) return reply.code(429).send({ error: "Забагато спроб входу. Спробуйте пізніше." });
+  async function releaseAttempt() {
+    await pool.query("update login_attempts set count = greatest(count - 1, 0) where id = $1 and started_at = $2", [attemptId, attempt.started_at]);
   }
   const parsed = z.object({ code: z.string().regex(/^\d{6}$/) }).safeParse(request.body);
   const token = randomBytes(32).toString("hex");
@@ -95,32 +108,29 @@ app.post("/api/auth/login", async (request, reply) => {
     user = parsed.success ? await db.transaction(async (tx) => {
       const [matched] = await tx.select().from(users).where(eq(users.keyCode, parsed.data.code)).for("update");
       if (!matched?.active) return undefined;
-      await tx.insert(sessions).values({ id: token, userId: matched.id });
+      await tx.insert(sessions).values({ id: sessionId(token), userId: matched.id });
       return matched;
     }) : undefined;
   } catch (error) {
-    releaseAttempt();
+    await releaseAttempt();
     throw error;
   }
   if (!user) {
     return reply.code(401).send({ error: "Невірний код або обліковий запис неактивний." });
   }
-  releaseAttempt();
-  reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: 60 * 60 * 24 * 365 });
+  await releaseAttempt();
+  reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: sessionMaxAge });
   return { id: user.id, name: user.name, role: user.role };
 });
 
 app.get("/api/auth/me", async (request, reply) => {
-  const token = request.cookies[sessionCookie];
-  if (!token) return reply.code(401).send({ error: "Потрібно увійти." });
-  const result = await db.select({ id: users.id, name: users.name, role: users.role, active: users.active }).from(sessions).innerJoin(users, eq(sessions.userId, users.id)).where(eq(sessions.id, token)).limit(1);
-  const user = result[0];
-  if (!user?.active) return reply.code(401).send({ error: "Сесію завершено." });
+  const user = await currentUser(request.cookies[sessionCookie]);
+  if (!user) return reply.code(401).send({ error: "Сесію завершено." });
   return { id: user.id, name: user.name, role: user.role };
 });
 app.post("/api/auth/logout", async (request, reply) => {
   const token = request.cookies[sessionCookie];
-  if (token) await db.delete(sessions).where(eq(sessions.id, token));
+  if (validSession(token)) await db.delete(sessions).where(eq(sessions.id, sessionId(token)));
   reply.clearCookie(sessionCookie, { path: "/" });
   return { ok: true };
 });
@@ -131,9 +141,9 @@ const createUser = z.object({ name: z.string().trim().min(1), role: roles, phone
 const updateUser = createUser.partial().extend({ active: z.boolean().optional(), expectedUpdatedAt: z.iso.datetime({ offset: true }).optional() }).strict();
 
 async function currentUser(token: string | undefined) {
-  if (!token) return undefined;
+  if (!validSession(token)) return undefined;
   const [user] = await db.select({ id: users.id, name: users.name, role: users.role, active: users.active }).from(sessions)
-    .innerJoin(users, eq(sessions.userId, users.id)).where(eq(sessions.id, token)).limit(1);
+    .innerJoin(users, eq(sessions.userId, users.id)).where(and(eq(sessions.id, sessionId(token)), sessionAlive)).limit(1);
   return user?.active ? user : undefined;
 }
 
@@ -176,10 +186,10 @@ async function notifyProject(tx: Transaction, actor: { id: string; name: string;
   await tx.insert(notifications).values([...recipients].map((userId) => ({ userId, type, projectId: project.id, subjectUserId: actor.id, payload })));
 }
 async function sessionStillValid(tx: Transaction, token: string | undefined, actor: { id: string; role: string }) {
-  if (!token) return "unauthorized" as const;
+  if (!validSession(token)) return "unauthorized" as const;
   const [current] = await tx.select({ id: users.id, role: users.role, active: users.active }).from(users).where(eq(users.id, actor.id)).for("share");
   if (!current?.active) return "unauthorized" as const;
-  const [session] = await tx.select({ id: sessions.id }).from(sessions).where(and(eq(sessions.id, token), eq(sessions.userId, actor.id))).for("share");
+  const [session] = await tx.select({ id: sessions.id }).from(sessions).where(and(eq(sessions.id, sessionId(token)), eq(sessions.userId, actor.id), sessionAlive)).for("share");
   if (!session) return "unauthorized" as const;
   return current.role === actor.role ? "ok" as const : "changed" as const;
 }
@@ -574,7 +584,7 @@ app.get("/api/audit", async (request, reply) => {
 
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() });
 class AttachmentAccessChanged extends Error {}
-class AttachmentLimitExceeded extends Error {}
+class AttachmentLimitExceeded extends Error { statusCode = 413; }
 async function attachmentAccess(projectId: string, actor: NonNullable<Awaited<ReturnType<typeof currentUser>>>, edit: boolean) {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return false;
@@ -602,16 +612,32 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
   const params = uuidParam.safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   if (!await attachmentAccess(params.data.id, actor, true)) return reply.code(403).send({ error: "Недостатньо прав." });
-  const file = await request.file();
-  if (!file || !file.filename.trim()) return reply.code(400).send({ error: "Оберіть файл." });
+  if (uploadingProjects.has(params.data.id) || uploadingProjects.size >= 2) return reply.code(429).send({ error: "Завантаження вже триває. Спробуйте пізніше." });
+  uploadingProjects.add(params.data.id);
   const key = `local/${params.data.id}/${randomUUID()}`;
-  let size = 0;
-  const counter = new Transform({ transform(chunk: Buffer, _encoding, callback) { size += chunk.length; callback(null, chunk); } });
+  const pendingPath = resolve(pendingDir, `${randomUUID()}.part`);
+  let size = 0, reserved = 0;
+  let file: Awaited<ReturnType<typeof request.file>>;
   try {
+    const [usage] = await db.select({ total: sql<string>`coalesce(sum(${attachments.size}), 0)` }).from(attachments).where(and(eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt)));
+    const remaining = attachmentLimit - Number(usage.total);
+    if (remaining <= 0) throw new AttachmentLimitExceeded();
     const path = localAttachmentPath(key);
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await pipeline(file.file, counter, createWriteStream(path, { flags: "wx", mode: 0o600 }));
-    if (file.file.truncated) throw new Error("Файл перевищує допустимий розмір.");
+    const disk = await statfs(attachmentDir);
+    if (disk.bavail * disk.bsize < remaining + reservedUploadBytes + 256 * 1024 * 1024) return reply.code(503).send({ error: "Недостатньо вільного місця для завантаження." });
+    reserved = remaining;
+    reservedUploadBytes += reserved;
+    file = await request.file();
+    if (!file || !file.filename.trim() || file.filename.length > 255) return reply.code(400).send({ error: "Оберіть файл з назвою до 255 символів." });
+    await mkdir(pendingDir, { recursive: true, mode: 0o700 });
+    const uploadedFile = file;
+    const counter = new Transform({ transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.length;
+      callback(size > remaining ? new AttachmentLimitExceeded() : null, chunk);
+    } });
+    await pipeline(file.file, counter, createWriteStream(pendingPath, { flags: "wx", mode: 0o600 }), { signal: AbortSignal.timeout(15 * 60_000) });
+    if (file.file.truncated) throw new AttachmentLimitExceeded();
     const refreshedActor = await currentUser(request.cookies[sessionCookie]);
     if (!refreshedActor || refreshedActor.id !== actor.id || !await attachmentAccess(params.data.id, refreshedActor, true)) throw new AttachmentAccessChanged();
     const attachment = await db.transaction(async (tx) => {
@@ -620,8 +646,9 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
       if (!project || project.archivedAt || !(actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD" || (actor.role === "MANAGER" && project.managerId === actor.id))) throw new AttachmentAccessChanged();
       const [usage] = await tx.select({ total: sql<string>`coalesce(sum(${attachments.size}), 0)` }).from(attachments).where(and(eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt)));
       if (Number(usage.total) + size > attachmentLimit) throw new AttachmentLimitExceeded();
-      const [item] = await tx.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size }).returning();
+      const [item] = await tx.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: uploadedFile.filename, storageKey: key, contentType: uploadedFile.mimetype, size }).returning();
       await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: item.id, action: "CREATE" });
+      await rename(pendingPath, path);
       return item;
     });
     return reply.code(201).send({ id: attachment.id, projectId: attachment.projectId, uploaderId: attachment.uploaderId, name: attachment.name, contentType: attachment.contentType, size: attachment.size, createdAt: attachment.createdAt });
@@ -630,6 +657,7 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
       await deleteStoredAttachment(key);
     } catch {
       try {
+        if (!file) throw new Error("Файл не отримано");
         await db.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size, deletedAt: new Date() });
         void scheduleCleanup();
       } catch {
@@ -638,7 +666,12 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
     }
     if (error instanceof AttachmentAccessChanged) return reply.code(403).send({ error: "Доступ до об’єкта змінився під час завантаження." });
     if (error instanceof AttachmentLimitExceeded) return reply.code(413).send({ error: "Загальний розмір вкладень об’єкта не може перевищувати 500 МБ." });
+    if (error instanceof Error && error.name === "AbortError") return reply.code(408).send({ error: "Час завантаження вичерпано. Спробуйте ще раз." });
     throw error;
+  } finally {
+    await rm(pendingPath, { force: true }).catch(() => request.log.error("Не вдалося очистити тимчасове вкладення"));
+    uploadingProjects.delete(params.data.id);
+    reservedUploadBytes -= reserved;
   }
 });
 app.get("/api/projects/:id/attachments/:attachmentId", async (request, reply) => {
@@ -687,6 +720,12 @@ let cleanupTask: Promise<void> | undefined;
 function scheduleCleanup() {
   if (cleanupTask) return cleanupTask;
   cleanupTask = (async () => {
+    await mkdir(pendingDir, { recursive: true, mode: 0o700 });
+    for (const name of await readdir(pendingDir)) {
+      if (!/^[a-f0-9-]{36}\.part$/.test(name)) continue;
+      const path = resolve(pendingDir, name);
+      if (Date.now() - (await stat(path)).mtimeMs > 24 * 60 * 60_000) await rm(path, { force: true });
+    }
     let after: string | undefined;
     for (;;) {
       const batch = await db.select({ id: attachments.id, key: attachments.storageKey }).from(attachments)
@@ -708,8 +747,8 @@ function scheduleCleanup() {
 }
 const cleanupTimer = setInterval(() => {
   void scheduleCleanup();
-  const now = Date.now();
-  for (const [ip, attempt] of attempts) if (attempt.until <= now) attempts.delete(ip);
+  void pool.query("delete from login_attempts where started_at < now() - interval '1 day'").catch(() => app.log.error("Не вдалося очистити обмеження входу"));
+  void pool.query("delete from sessions where created_at <= now() - interval '365 days'").catch(() => app.log.error("Не вдалося очистити прострочені сесії"));
 }, 60_000);
 app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; storage?.destroy(); await pool.end(); });
 void scheduleCleanup();
@@ -739,6 +778,7 @@ try {
   await pool.query("select subject_user_id from notifications limit 0");
   await pool.query("select payload from notifications limit 0");
   await pool.query("select storage_deleted_at from attachments limit 0");
+  await pool.query("select count from login_attempts limit 0");
   startupStage = "server";
   await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
   app.log.info("Сервер запущено");

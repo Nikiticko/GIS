@@ -15,6 +15,9 @@ export const users = pgTable("users", {
 export const sessions = pgTable("sessions", {
   id: text("id").primaryKey(), userId: uuid("user_id").notNull().references(() => users.id), createdAt: createdAt(),
 }, (t) => [index("sessions_user_idx").on(t.userId)]);
+export const loginAttempts = pgTable("login_attempts", {
+  id: text("id").primaryKey(), startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(), count: integer("count").notNull(),
+});
 export const workTypes = pgTable("work_types", { id: id(), name: text("name").notNull(), active: boolean("active").notNull().default(true) });
 export const vehicles = pgTable("vehicles", { id: id(), name: text("name").notNull(), registration: text("registration").notNull(), active: boolean("active").notNull().default(true) });
 export const projects = pgTable("production_projects", {

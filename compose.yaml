@@ -23,6 +23,10 @@ services:
       context: .
       target: api
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       TRUST_PROXY: 172.29.0.254
