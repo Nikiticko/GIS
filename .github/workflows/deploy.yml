@@ -64,4 +64,5 @@ jobs:
           set -euo pipefail
           git archive --format=tar "$GITHUB_SHA" > /tmp/gis-calendar-release.tar
           scp /tmp/gis-calendar-release.tar "gis-vps:/tmp/gis-calendar-${GITHUB_SHA}.tar"
-          ssh gis-vps "bash -s -- ${GITHUB_SHA}" < scripts/deploy.sh
+          scp scripts/deploy.sh gis-vps:/tmp/gis-calendar-deploy.sh
+          ssh gis-vps "bash /tmp/gis-calendar-deploy.sh ${GITHUB_SHA} </dev/null"
