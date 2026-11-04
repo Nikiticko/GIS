@@ -50,6 +50,13 @@ async function prepareLocalDatabase() {
     if (stopping || !isDatabaseReady()) throw new LocalSetupError("Локальна PostgreSQL не запустилася.");
   }
   localStage = "schema";
+  const migration = start(process.execPath, ["--import", "tsx", resolve(root, "server/migrate.ts")]);
+  const migrationExitCode = await new Promise((done, fail) => {
+    migration.once("error", fail);
+    migration.once("exit", done);
+  });
+  if (migrationExitCode !== 0) throw new LocalSetupError("Не вдалося застосувати міграції локальної бази.");
+
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000 });
   let hasUsers;
