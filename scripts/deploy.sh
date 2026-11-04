@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
+exec </dev/null
 umask 077
+trap 'status=$?; echo "Помилка розгортання на рядку $LINENO (код $status)." >&2' ERR
 
 revision=${1:?Потрібен SHA коміту}
 [[ "$revision" =~ ^[a-f0-9]{40}$ ]] || { echo "Некоректний SHA" >&2; exit 1; }
@@ -15,10 +17,25 @@ mkdir -p "$release"
 tar -xf "$archive" -C "$release"
 rm -f "$archive"
 compose=(docker compose -p gis-calendar --project-directory "$release" --env-file "$root/.env" -f "$release/compose.yaml")
+echo "Складання контейнерів"
 "${compose[@]}" build
+echo "Запуск PostgreSQL"
 "${compose[@]}" up -d --wait db
+echo "Застосування міграцій"
 "${compose[@]}" stop api </dev/null
 "${compose[@]}" run --rm -T api node dist-api/migrate.js </dev/null
+echo "Запуск і перевірка контейнерів"
 "${compose[@]}" up -d --wait --wait-timeout 120
+for service in db api web; do
+  container=$("${compose[@]}" ps -q "$service")
+  [[ -n "$container" ]] || { echo "Контейнер $service відсутній" >&2; exit 1; }
+  state=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")
+  [[ "$state" == 'running healthy' ]] || { echo "Контейнер $service: $state" >&2; exit 1; }
+  echo "$service: $state"
+done
+echo "Перевірка HTTPS та API через Caddy"
+curl --fail --silent --show-error --noproxy '*' --max-time 15 --retry 6 --retry-delay 5 --retry-all-errors --resolve gis-calendar.tech:443:127.0.0.1 https://gis-calendar.tech/ | grep '<div id="root"' >/dev/null
+curl --fail --silent --show-error --noproxy '*' --max-time 15 --retry 6 --retry-delay 5 --retry-all-errors --resolve gis-calendar.tech:443:127.0.0.1 https://gis-calendar.tech/api/health | grep -E '"status"[[:space:]]*:[[:space:]]*"ok"' >/dev/null
 ln -sfn "$release" "$root/current"
-echo "Версію $revision запущено."
+[[ "$(readlink "$root/current")" == "$release" ]] || { echo "Не вдалося оновити current" >&2; exit 1; }
+echo "GIS_DEPLOY_SUCCESS $revision"
