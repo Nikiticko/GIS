@@ -34,6 +34,7 @@ export default function App() {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [modal, setModal] = useState<"create" | "detail" | "edit" | "plan" | null>(null);
+  const [createDates, setCreateDates] = useState<{ desiredStart: string; desiredEnd: string }>();
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -164,8 +165,8 @@ export default function App() {
       <main className="main-content"><div className="content-inner">
         {connectionError && <div className="connection-alert" role="alert">{connectionError} <button onClick={() => void loadSession()}>Повторити</button></div>}
         {!effectiveScreen && <section className="page-stack"><div className="page-heading"><h1>{screen ? "Доступ до сторінки обмежено" : "Сторінку не знайдено"}</h1></div><a href={paths.projects} onClick={(event) => navigate(event, "projects")}>Перейти до об’єктів</a></section>}
-        {(effectiveScreen === "projects" || effectiveScreen === "archive") && <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{effectiveScreen === "archive" ? "Архів об’єктів" : manager || employee ? "Мої об’єкти" : "Об’єкти"}</h1></div>{effectiveScreen === "projects" && canCreate && <Button onClick={() => setModal("create")}><Plus data-icon="inline-start" />Новий об’єкт</Button>}</div><ProjectList rows={currentRows} open={openProject} /></section>}
-        {effectiveScreen === "schedule" && <ProductionMonthCalendar rows={data.schedule} employee={employee} onOpen={(id) => void openProject(id)} />}
+        {(effectiveScreen === "projects" || effectiveScreen === "archive") && <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{effectiveScreen === "archive" ? "Архів об’єктів" : manager || employee ? "Мої об’єкти" : "Об’єкти"}</h1></div>{effectiveScreen === "projects" && canCreate && <Button onClick={() => { setCreateDates(undefined); setModal("create"); }}><Plus data-icon="inline-start" />Новий об’єкт</Button>}</div><ProjectList rows={currentRows} open={openProject} /></section>}
+        {effectiveScreen === "schedule" && <ProductionMonthCalendar rows={data.schedule} employee={employee} onSelectDates={canCreate ? (desiredStart, desiredEnd) => { setCreateDates({ desiredStart, desiredEnd }); setModal("create"); } : undefined} onOpen={(id) => void openProject(id)} />}
         {effectiveScreen === "employees" && <section className="page-stack"><div className="page-heading"><h1>Працівники виробництва</h1></div><div className="production-list">{data.employees.map((person) => <div className="production-panel" key={person.id}><strong>{person.name}</strong><p>{person.phone || "Телефон не вказано"} · {person.active ? "Активний" : "Неактивний"}{person.foreman ? " · Бригадир" : ""}</p></div>)}</div></section>}
         {effectiveScreen === "users" && admin && <ProductionUsers users={data.users} refresh={reload} />}
         {effectiveScreen === "directories" && admin && <ProductionDirectories workTypes={data.workTypes} vehicles={data.vehicles} refresh={reload} />}
@@ -175,7 +176,7 @@ export default function App() {
     </div>
     <Dialog open={modal !== null} onOpenChange={(open) => { if (!open && !uploading) setModal(null); }}><DialogContent className="modal-content production-modal">
       {connectionError && <p className="form-error" role="alert">{connectionError}</p>}
-      {modal === "create" && <><DialogHeader><DialogTitle>Новий об’єкт</DialogTitle><DialogDescription>Об’єкт одразу стане доступним керівнику виробництва.</DialogDescription></DialogHeader><ProductionProjectForm workTypes={data.workTypes} managers={data.users} isAdmin={admin} onSave={saveProject} onCancel={() => setModal(null)} /></>}
+      {modal === "create" && <><DialogHeader><DialogTitle>Новий об’єкт</DialogTitle><DialogDescription>Об’єкт одразу стане доступним керівнику виробництва.</DialogDescription></DialogHeader><ProductionProjectForm initialDates={createDates} workTypes={data.workTypes} managers={data.users} isAdmin={admin} onSave={saveProject} onCancel={() => setModal(null)} /></>}
       {modal === "edit" && detail && <><DialogHeader><DialogTitle>Редагування об’єкта</DialogTitle><DialogDescription>{detail.project.name}</DialogDescription></DialogHeader><ProductionProjectForm key={detail.project.id} initial={detail.project} isManager={manager} isAdmin={admin} workTypes={data.workTypes} managers={data.users} onSave={saveProject} onCancel={() => setModal("detail")} /></>}
       {modal === "plan" && detail && <><DialogHeader><DialogTitle>Планування об’єкта</DialogTitle><DialogDescription>{detail.project.name}</DialogDescription></DialogHeader><ProductionPlanForm key={detail.project.id} detail={detail} employees={data.employees} vehicles={data.vehicles} onSaved={async (files) => { const failed = await uploadFiles(detail.project.id, files); setModal(null); await refreshAfterWrite("План збережено.", reload); reportFailedUploads(failed); }} onCancel={() => setModal("detail")} /></>}
       {modal === "detail" && detail && <><DialogHeader><DialogTitle>{detail.project.name}</DialogTitle><DialogDescription>{statuses[detail.status]} · {detail.workTypeName}</DialogDescription></DialogHeader><div className="form-stack">

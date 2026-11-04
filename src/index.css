@@ -633,6 +633,12 @@ button:disabled { cursor: not-allowed; }
 .production-month-cell { grid-row: 1 / -1; min-width: 0; border-right: 1px solid var(--line); background: #fff; }
 .production-month-cell.outside-month { background: #f7f9fb; }
 .production-month-cell.today { background: #f1f7fc; }
+.production-month-cell.selectable { padding: 0; border: 0; border-right: 1px solid var(--line); border-radius: 0; cursor: pointer; }
+.production-month-cell.selectable:hover { background: #edf5ff; }
+.production-month-cell.selectable:focus-visible { outline: 2px solid #2e618a; outline-offset: -2px; }
+.production-month-cell.selection-start { background: #e5efff; }
+.production-month-event.calendar-draft { color: #164d80; background: #d7eaff; border: 1px dashed #2e618a; pointer-events: none; }
+.calendar-selection-help { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #536a7e; font-size: 13px; }
 .production-month-day { z-index: 1; grid-row: 1; align-self: center; justify-self: start; width: 26px; height: 26px; margin-left: 7px; border-radius: 50%; color: #536a7e; font-size: 12px; line-height: 26px; text-align: center; pointer-events: none; }
 .production-month-day.outside-month { color: #a5b1bc; }
 .production-month-day.today { color: #fff; background: #2e618a; font-weight: 700; }

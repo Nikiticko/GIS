@@ -11,11 +11,12 @@ type Values = { name: string; managerId: string; workTypeId: string; address: st
 const empty: Values = { name: "", managerId: "", workTypeId: "", address: "", locationUrl: "", volume: "", information: "", desiredStart: "", desiredEnd: "" };
 const isMapLink = (value: string) => /^https?:\/\//i.test(value.trim());
 
-export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, isManager, onSave, onCancel }: {
+export function ProductionProjectForm({ workTypes, managers, isAdmin, initial, initialDates, isManager, onSave, onCancel }: {
   workTypes: WorkType[]; managers: User[]; isAdmin: boolean; initial?: Project; isManager?: boolean;
+  initialDates?: { desiredStart: string; desiredEnd: string };
   onSave: (values: ProjectValues, files: File[]) => Promise<void>; onCancel: () => void;
 }) {
-  const [values, setValues] = useState<Values>(() => initial ? { name: initial.name, managerId: initial.managerId, workTypeId: initial.workTypeId, address: initial.address, locationUrl: isMapLink(initial.locationUrl ?? "") ? initial.locationUrl! : "", volume: initial.volume ?? "", information: initial.information ?? "", desiredStart: initial.desiredStart ?? "", desiredEnd: initial.desiredEnd ?? "" } : empty);
+  const [values, setValues] = useState<Values>(() => initial ? { name: initial.name, managerId: initial.managerId, workTypeId: initial.workTypeId, address: initial.address, locationUrl: isMapLink(initial.locationUrl ?? "") ? initial.locationUrl! : "", volume: initial.volume ?? "", information: initial.information ?? "", desiredStart: initial.desiredStart ?? "", desiredEnd: initial.desiredEnd ?? "" } : { ...empty, ...initialDates });
   const restricted = Boolean(initial?.plannedStart && isManager);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
