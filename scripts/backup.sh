@@ -1,12 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 umask 077
-cd "$(dirname "$0")/.."
+cd /opt/gis-calendar
+export COMPOSE_PROJECT_NAME=gis-calendar
+export COMPOSE_FILE=/opt/gis-calendar/current/compose.yaml
+export COMPOSE_ENV_FILES=/opt/gis-calendar/.env
 
 # GIS_BACKUP_REMOTE має вказувати на rclone crypt remote, а не на Google Drive напряму.
 : "${GIS_BACKUP_REMOTE:?Не задано зашифроване сховище GIS_BACKUP_REMOTE}"
-exec 9> /tmp/gis-calendar-backup.lock
-flock -n 9 || { echo "Резервне копіювання вже виконується" >&2; exit 1; }
+exec 9> /tmp/gis-calendar-operation.lock
+flock -w 3600 9 || { echo "Інша операція все ще виконується" >&2; exit 1; }
 work=$(mktemp -d)
 stopped=0
 cleanup() {

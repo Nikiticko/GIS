@@ -1,0 +1,67 @@
+name: Перевірка та розгортання
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gis-calendar-production
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run api:build
+      - run: node --test tests/*.test.mjs
+      - name: Перевірити збірку контейнерів
+        run: docker compose build
+        env:
+          DOMAIN: example.invalid
+          POSTGRES_PASSWORD: example
+          DATABASE_URL: postgresql://gis:example@db:5432/gis
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: check
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Налаштувати SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.VPS_HOST }}
+          SSH_USER: ${{ secrets.VPS_USER }}
+          SSH_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS" && test -n "$SSH_HOST" && test -n "$SSH_USER"
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9.:-]+$ && "$SSH_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
+          SSH_PORT=${SSH_PORT:-22}
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf 'Host gis-vps\n  HostName %s\n  User %s\n  Port %s\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' "$SSH_HOST" "$SSH_USER" "$SSH_PORT" > ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/known_hosts
+      - name: Передати та запустити версію
+        run: |
+          set -euo pipefail
+          git archive --format=tar "$GITHUB_SHA" > /tmp/gis-calendar-release.tar
+          scp /tmp/gis-calendar-release.tar "gis-vps:/tmp/gis-calendar-${GITHUB_SHA}.tar"
+          ssh gis-vps "bash -s -- ${GITHUB_SHA}" < scripts/deploy.sh

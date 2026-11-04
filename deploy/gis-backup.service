@@ -5,6 +5,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
+User=gis-deploy
 WorkingDirectory=/opt/gis-calendar
 Environment=GIS_BACKUP_REMOTE=gis-encrypted:backups
-ExecStart=/bin/bash /opt/gis-calendar/scripts/backup.sh
+ExecStart=/bin/bash /opt/gis-calendar/current/scripts/backup.sh
