@@ -15,10 +15,12 @@ import { z } from "zod";
 import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
-mkdirSync(dirname(logFile), { recursive: true, mode: 0o700 });
-closeSync(openSync(logFile, "a", 0o600));
+if (process.env.NODE_ENV !== "production") {
+  mkdirSync(dirname(logFile), { recursive: true, mode: 0o700 });
+  closeSync(openSync(logFile, "a", 0o600));
+}
 class SessionExpired extends Error { statusCode = 401; }
-const app = Fastify({ logger: { level: "info", file: logFile }, logController: new Fastify.LogController({ disableRequestLogging: true }), trustProxy: process.env.TRUST_PROXY || false });
+const app = Fastify({ logger: process.env.NODE_ENV === "production" ? { level: "info" } : { level: "info", file: logFile }, logController: new Fastify.LogController({ disableRequestLogging: true }), trustProxy: process.env.TRUST_PROXY || false });
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   app.log.fatal("Не задано DATABASE_URL");

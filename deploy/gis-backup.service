@@ -1,0 +1,10 @@
+[Unit]
+Description=Резервне копіювання GIS Reports
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/gis-reports
+Environment=GIS_BACKUP_REMOTE=gis-encrypted:backups
+ExecStart=/bin/bash /opt/gis-reports/scripts/backup.sh

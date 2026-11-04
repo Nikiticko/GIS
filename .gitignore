@@ -5,6 +5,7 @@ dist/
 !.env.example
 *.tsbuildinfo
 *.md 
+!README.md
 dist-api/
 logs/
 .local/
