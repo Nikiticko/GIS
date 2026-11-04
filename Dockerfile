@@ -12,6 +12,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/dist-api ./dist-api
 COPY --from=build /app/server/migrations ./server/migrations
+RUN chmod -R a+rX /app/server/migrations
 COPY --from=build /app/server/load-env.mjs ./server/load-env.mjs
 RUN mkdir -p /app/data/attachments && chown -R node:node /app/data
 USER node
