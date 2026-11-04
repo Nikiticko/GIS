@@ -28,7 +28,7 @@ export function LoginView({ onLogin }: { onLogin: (user: CurrentUser) => void })
 
   return <main className="login-page">
     <section className="login-card">
-      <div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Reports</strong><span>ВИРОБНИЦТВО</span></div></div>
+      <div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Calendar</strong><span>ВИРОБНИЦТВО</span></div></div>
       <div><h1>Вхід до системи</h1><p>Введіть персональний ключ-код, наданий адміністратором.</p></div>
       <form className="form-stack" onSubmit={submit}>
         <div className="field"><Label htmlFor="key-code">Ключ-код</Label><Input id="key-code" type="password" inputMode="numeric" autoComplete="off" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} required /></div>

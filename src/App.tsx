@@ -159,7 +159,7 @@ export default function App() {
   const currentRows = effectiveScreen === "archive" ? data.archive : data.projects;
   const canEdit = Boolean(detail && !detail.project.archivedAt && (admin || head || (manager && detail.project.managerId === user.id)));
   return <div className="app-shell">
-    <header className="topbar"><div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Reports</strong><span>ВИРОБНИЦТВО</span></div></div><div className="production-account"><span>{user.name}</span><Button variant="outline" onClick={() => void logout()} disabled={busy}><LogOut data-icon="inline-start" />Вийти</Button></div></header>
+    <header className="topbar"><div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Calendar</strong><span>ВИРОБНИЦТВО</span></div></div><div className="production-account"><span>{user.name}</span><Button variant="outline" onClick={() => void logout()} disabled={busy}><LogOut data-icon="inline-start" />Вийти</Button></div></header>
     <div className="production-layout"><nav className="production-nav" aria-label="Основна навігація">{nav.map(({ key, title, icon: Icon }) => <a key={key} href={paths[key]} className={`nav-link ${effectiveScreen === key ? "active" : ""}`} aria-current={effectiveScreen === key ? "page" : undefined} onClick={(event) => navigate(event, key)}><Icon size={17} />{title}</a>)}</nav>
       <main className="main-content"><div className="content-inner">
         {connectionError && <div className="connection-alert" role="alert">{connectionError} <button onClick={() => void loadSession()}>Повторити</button></div>}

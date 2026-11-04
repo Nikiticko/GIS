@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 # GIS_BACKUP_REMOTE має вказувати на rclone crypt remote, а не на Google Drive напряму.
 : "${GIS_BACKUP_REMOTE:?Не задано зашифроване сховище GIS_BACKUP_REMOTE}"
-exec 9> /tmp/gis-reports-backup.lock
+exec 9> /tmp/gis-calendar-backup.lock
 flock -n 9 || { echo "Резервне копіювання вже виконується" >&2; exit 1; }
 work=$(mktemp -d)
 stopped=0

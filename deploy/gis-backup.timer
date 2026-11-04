@@ -1,5 +1,5 @@
 [Unit]
-Description=Щоденне резервне копіювання GIS Reports
+Description=Щоденне резервне копіювання GIS Calendar
 
 [Timer]
 OnCalendar=*-*-* 03:00:00 Europe/Kyiv

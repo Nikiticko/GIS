@@ -1,10 +1,10 @@
 [Unit]
-Description=Резервне копіювання GIS Reports
+Description=Резервне копіювання GIS Calendar
 Requires=docker.service
 After=docker.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/gis-reports
+WorkingDirectory=/opt/gis-calendar
 Environment=GIS_BACKUP_REMOTE=gis-encrypted:backups
-ExecStart=/bin/bash /opt/gis-reports/scripts/backup.sh
+ExecStart=/bin/bash /opt/gis-calendar/scripts/backup.sh
