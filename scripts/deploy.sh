@@ -18,7 +18,7 @@ compose=(docker compose -p gis-calendar --project-directory "$release" --env-fil
 "${compose[@]}" build
 "${compose[@]}" up -d --wait db
 "${compose[@]}" stop api </dev/null
-"${compose[@]}" run --rm -T api node dist-api/migrate.js
+"${compose[@]}" run --rm -T api node dist-api/migrate.js </dev/null
 "${compose[@]}" up -d --wait --wait-timeout 120
 ln -sfn "$release" "$root/current"
 echo "Версію $revision запущено."
