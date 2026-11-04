@@ -15,6 +15,8 @@ export interface ProjectRow { project: Project; workTypeName: string; status: St
 export interface ScheduleRow extends ProjectRow { managerName: string; employeeIds: string[]; team: string[]; vehicles: string[] }
 export interface ProjectDetail extends ProjectRow {
   managerName: string;
+  managerPhone: string | null;
+  creatorName: string;
   team: { id: string; name: string; phone: string | null; responsible: boolean }[];
   vehicles: Pick<Vehicle, "id" | "name" | "registration">[];
 }

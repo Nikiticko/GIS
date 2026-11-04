@@ -660,6 +660,8 @@ button:disabled { cursor: not-allowed; }
 .employee-schedule-event.status-in-progress { color: #145c3e; background: #d3f2df; }
 .employee-schedule-event.status-completed { color: #4c5c69; background: #e3e9ed; }
 .employee-schedule-event:focus-visible { outline: 2px solid #1a4c73; outline-offset: 1px; }
+.production-detail-grid .project-team-contact { display: block; color: inherit; font-size: inherit; }
+.project-information { white-space: pre-wrap; }
 @media (max-width: 640px) { .employee-schedule-grid { --employee-width: 140px; } .employee-schedule-person { padding: 10px; font-size: 12px; } }
 .production-month-day { z-index: 1; grid-row: 1; align-self: center; justify-self: start; width: 26px; height: 26px; margin-left: 7px; border-radius: 50%; color: #536a7e; font-size: 12px; line-height: 26px; text-align: center; pointer-events: none; }
 .production-month-day.outside-month { color: #a5b1bc; }

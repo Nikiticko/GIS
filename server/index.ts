@@ -500,8 +500,9 @@ app.get("/api/projects/:id", async (request, reply) => {
   const team = await db.select({ id: users.id, name: users.name, phone: users.phone, responsible: assignments.responsible }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, row.project.id));
   if (actor.role === "PRODUCTION_EMPLOYEE" && (row.project.archivedAt || !team.some((person) => person.id === actor.id))) return reply.code(403).send({ error: "Недостатньо прав." });
   const cars = await db.select({ id: vehicles.id, name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, row.project.id));
-  const [manager] = await db.select({ name: users.name }).from(users).where(eq(users.id, row.project.managerId));
-  return { ...row, managerName: manager?.name ?? "", team, vehicles: cars };
+  const [manager] = await db.select({ name: users.name, phone: users.phone }).from(users).where(eq(users.id, row.project.managerId));
+  const [creator] = await db.select({ name: users.name }).from(users).where(eq(users.id, row.project.creatorId));
+  return { ...row, managerName: manager?.name ?? "", managerPhone: manager?.phone ?? null, creatorName: creator?.name ?? "", team, vehicles: cars };
 });
 
 app.patch("/api/projects/:id", async (request, reply) => {
