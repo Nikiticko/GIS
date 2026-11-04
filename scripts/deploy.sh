@@ -17,7 +17,7 @@ rm -f "$archive"
 compose=(docker compose -p gis-calendar --project-directory "$release" --env-file "$root/.env" -f "$release/compose.yaml")
 "${compose[@]}" build
 "${compose[@]}" up -d --wait db
-"${compose[@]}" stop api
+"${compose[@]}" stop api </dev/null
 "${compose[@]}" run --rm -T api node dist-api/migrate.js
 "${compose[@]}" up -d --wait --wait-timeout 120
 ln -sfn "$release" "$root/current"
