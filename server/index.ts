@@ -46,7 +46,8 @@ app.addHook("onResponse", async (request, reply) => {
   else request.log.info(details, "Запит виконано");
 });
 await app.register(cookie);
-await app.register(multipart, { limits: { files: 1, fileSize: 2_147_483_647 } });
+const attachmentLimit = 500 * 1024 * 1024;
+await app.register(multipart, { limits: { files: 1, fileSize: attachmentLimit } });
 const bucket = process.env.S3_BUCKET;
 const storage = bucket ? new S3Client({ region: process.env.AWS_REGION || "us-east-1", endpoint: process.env.S3_ENDPOINT || undefined, forcePathStyle: true }) : null;
 const attachmentDir = resolve(process.env.ATTACHMENTS_DIR || ".local/attachments");
@@ -63,6 +64,15 @@ async function deleteStoredAttachment(key: string) {
 const sessionCookie = "gis_session";
 const secure = process.env.NODE_ENV === "production";
 const attempts = new Map<string, { count: number; until: number }>();
+
+app.get("/api/health", async (_request, reply) => {
+  try {
+    await pool.query("select 1");
+    return { status: "ok" };
+  } catch {
+    return reply.code(503).send({ status: "unavailable" });
+  }
+});
 
 app.post("/api/auth/login", async (request, reply) => {
   const now = Date.now();
@@ -560,6 +570,7 @@ app.get("/api/audit", async (request, reply) => {
 
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() });
 class AttachmentAccessChanged extends Error {}
+class AttachmentLimitExceeded extends Error {}
 async function attachmentAccess(projectId: string, actor: NonNullable<Awaited<ReturnType<typeof currentUser>>>, edit: boolean) {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return false;
@@ -603,6 +614,8 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
       if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new AttachmentAccessChanged();
       const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
       if (!project || project.archivedAt || !(actor.role === "ADMIN" || actor.role === "PRODUCTION_HEAD" || (actor.role === "MANAGER" && project.managerId === actor.id))) throw new AttachmentAccessChanged();
+      const [usage] = await tx.select({ total: sql<string>`coalesce(sum(${attachments.size}), 0)` }).from(attachments).where(and(eq(attachments.projectId, params.data.id), isNull(attachments.deletedAt)));
+      if (Number(usage.total) + size > attachmentLimit) throw new AttachmentLimitExceeded();
       const [item] = await tx.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: file.filename, storageKey: key, contentType: file.mimetype, size }).returning();
       await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: item.id, action: "CREATE" });
       return item;
@@ -620,6 +633,7 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
       }
     }
     if (error instanceof AttachmentAccessChanged) return reply.code(403).send({ error: "Доступ до об’єкта змінився під час завантаження." });
+    if (error instanceof AttachmentLimitExceeded) return reply.code(413).send({ error: "Загальний розмір вкладень об’єкта не може перевищувати 500 МБ." });
     throw error;
   }
 });

@@ -29,6 +29,13 @@
       "when": 1793539661934,
       "tag": "0003_silly_black_panther",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793802153700,
+      "tag": "0004_good_bucky",
+      "breakpoints": true
     }
   ]
 }

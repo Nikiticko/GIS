@@ -1,0 +1,2 @@
+ALTER TABLE "production_projects" DROP CONSTRAINT "project_location_check";--> statement-breakpoint
+ALTER TABLE "production_projects" ADD CONSTRAINT "project_location_check" CHECK (coalesce(length(trim("production_projects"."address")), 0) > 0);
