@@ -161,15 +161,26 @@ app.post("/api/auth/telegram", async (request, reply) => {
   const telegramUser = input.success ? validatedTelegramUser(input.data.initData) : undefined;
   if (!telegramUser) return reply.code(401).send({ error: "Не вдалося підтвердити вхід через Telegram." });
   const token = randomBytes(32).toString("hex");
-  const user = await db.transaction(async (tx) => {
+  const currentToken = request.cookies[sessionCookie];
+  const result = await db.transaction(async (tx) => {
     const [matched] = await tx.select({ id: users.id, name: users.name, role: users.role, active: users.active }).from(telegramLinks).innerJoin(users, eq(users.id, telegramLinks.userId)).where(eq(telegramLinks.telegramUserId, telegramUser.id)).for("share");
-    if (!matched?.active) return undefined;
+    const currentSessionId = validSession(currentToken) ? sessionId(currentToken) : undefined;
+    const [existing] = currentSessionId ? await tx.select({ userId: sessions.userId }).from(sessions).where(and(eq(sessions.id, currentSessionId), sessionAlive)).for("update") : [];
+    if (!matched?.active) {
+      if (existing && currentSessionId) await tx.delete(sessions).where(eq(sessions.id, currentSessionId));
+      return undefined;
+    }
+    if (existing?.userId === matched.id) return { user: matched, reused: true };
+    if (existing && currentSessionId) await tx.delete(sessions).where(eq(sessions.id, currentSessionId));
     await tx.insert(sessions).values({ id: sessionId(token), userId: matched.id });
-    return matched;
+    return { user: matched, reused: false };
   });
-  if (!user) return reply.code(403).send({ error: "Telegram не прив’язано до активного користувача GIS." });
-  reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: sessionMaxAge });
-  return { id: user.id, name: user.name, role: user.role, telegramLinked: true };
+  if (!result) {
+    reply.clearCookie(sessionCookie, { path: "/" });
+    return reply.code(403).send({ error: "Telegram не прив’язано до активного користувача GIS." });
+  }
+  if (!result.reused) reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: sessionMaxAge });
+  return { id: result.user.id, name: result.user.name, role: result.user.role, telegramLinked: true };
 });
 
 app.get("/api/auth/me", async (request, reply) => {

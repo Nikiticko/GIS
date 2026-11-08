@@ -73,16 +73,14 @@ export default function App() {
   const loadSession = useCallback(async () => {
     try {
       let current: CurrentUser;
-      try { current = await api.me(); }
-      catch (error) {
-        const initData = window.Telegram?.WebApp.initData;
-        if (!(error instanceof ApiError) || error.status !== 401 || !initData) throw error;
+      const initData = window.Telegram?.WebApp.initData;
+      if (initData) {
         try { current = await api.telegramLogin(initData); }
         catch (telegramError) {
           if (telegramError instanceof ApiError && (telegramError.status === 401 || telegramError.status === 403)) { reset(); return; }
           throw telegramError;
         }
-      }
+      } else current = await api.me();
       if (sessionIdentity.current && (sessionIdentity.current.id !== current.id || sessionIdentity.current.role !== current.role)) { setData(initialData); setDetail(null); setModal(null); }
       sessionIdentity.current = current; setUser(current);
       if (current.telegramLinked && window.sessionStorage.getItem("telegramLinkPending")) {
