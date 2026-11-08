@@ -234,7 +234,7 @@ async function createNotifications(tx: Transaction, values: { userId: string; ty
   const deliveries = created.filter((item) => linkedIds.has(item.userId)).map((item) => ({ notificationId: item.id }));
   if (deliveries.length) await tx.insert(telegramDeliveries).values(deliveries);
 }
-async function notifyProject(tx: Transaction, actor: { id: string; name: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = [], previousWorkers: string[] = []) {
+async function notifyProject(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = [], previousWorkers: string[] = []) {
   if (actor.role === "ADMIN") return;
   const planned = Boolean(project.plannedStart);
   const assigned = await tx.select({ id: users.id, name: users.name }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, project.id));
@@ -248,7 +248,7 @@ async function notifyProject(tx: Transaction, actor: { id: string; name: string;
   const [manager] = await tx.select({ name: users.name }).from(users).where(eq(users.id, project.managerId));
   const [workType] = await tx.select({ name: workTypes.name }).from(workTypes).where(eq(workTypes.id, project.workTypeId));
   const cars = await tx.select({ name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, project.id));
-  const payload: NotificationPayload = { actor: actor.name, projectName: project.name, ...(event === "created" || event === "planned" ? { manager: manager?.name ?? "", start: planned ? project.plannedStart : project.desiredStart, end: planned ? project.plannedEnd : project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, ...(planned ? { team: assigned.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`) } : {}) } : {}), ...(changes.length ? { changes } : {}) };
+  const payload: NotificationPayload = { projectName: project.name, ...(event === "created" || event === "planned" ? { manager: manager?.name ?? "", start: planned ? project.plannedStart : project.desiredStart, end: planned ? project.plannedEnd : project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, ...(planned ? { team: assigned.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`) } : {}) } : {}), ...(changes.length ? { changes } : {}) };
   const type = { created: "PROJECT_CREATED_V2", planned: "PROJECT_PLANNED", changed: "PROJECT_CHANGED", archived: "PROJECT_ARCHIVED_V2" }[event];
   await createNotifications(tx, [...recipients].map((userId) => ({ userId, type, projectId: project.id, subjectUserId: actor.id, payload })));
 }
@@ -612,8 +612,7 @@ app.get("/api/projects/:id", async (request, reply) => {
   if (actor.role === "PRODUCTION_EMPLOYEE" && (row.project.archivedAt || !team.some((person) => person.id === actor.id))) return reply.code(403).send({ error: "Недостатньо прав." });
   const cars = await db.select({ id: vehicles.id, name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, row.project.id));
   const [manager] = await db.select({ name: users.name, phone: users.phone }).from(users).where(eq(users.id, row.project.managerId));
-  const [creator] = await db.select({ name: users.name }).from(users).where(eq(users.id, row.project.creatorId));
-  return { ...row, managerName: manager?.name ?? "", managerPhone: manager?.phone ?? null, creatorName: creator?.name ?? "", team, vehicles: cars };
+  return { ...row, managerName: manager?.name ?? "", managerPhone: manager?.phone ?? null, team, vehicles: cars };
 });
 
 app.patch("/api/projects/:id", async (request, reply) => {
@@ -661,10 +660,10 @@ app.get("/api/notifications", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
   const canOpen = actor.role === "PRODUCTION_EMPLOYEE" ? sql<boolean>`${projects.id} is not null and ${projects.archivedAt} is null and exists (select 1 from ${assignments} where ${assignments.projectId} = ${projects.id} and ${assignments.userId} = ${actor.id})` : actor.role === "MANAGER" ? sql<boolean>`${projects.id} is not null and (${projects.managerId} = ${actor.id} or (${projects.archivedAt} is null and (${projects.plannedStart} is not null or ${projects.desiredStart} is not null)))` : sql<boolean>`${projects.id} is not null`;
-  return db.select({ notification: notifications, subjectName: users.name, projectName: projects.name, canOpen }).from(notifications)
-    .leftJoin(users, eq(notifications.subjectUserId, users.id)).leftJoin(projects, eq(notifications.projectId, projects.id))
+  return db.select({ notification: notifications, projectName: projects.name, canOpen }).from(notifications)
+    .leftJoin(projects, eq(notifications.projectId, projects.id))
     .where(eq(notifications.userId, actor.id)).orderBy(sql`${notifications.createdAt} desc`)
-    .then((rows) => rows.map(({ notification, subjectName, projectName, canOpen }) => ({ ...notification, subjectName, projectName, canOpen })));
+    .then((rows) => rows.map(({ notification, projectName, canOpen }) => ({ ...notification, projectName, canOpen })));
 });
 app.post("/api/notifications/:id/read", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
@@ -874,7 +873,6 @@ function telegramMessage(type: string, payload: NotificationPayload | null) {
   const lines = [telegramTitles[type] ?? "Системне сповіщення"];
   if (!payload) return lines[0];
   if (payload.projectName) lines[0] += `: ${payload.projectName}`;
-  lines.push(`Хто: ${payload.actor}`);
   if (payload.manager !== undefined) lines.push(`Менеджер: ${payload.manager}`, `Дати: ${payload.start ?? "—"} — ${payload.end ?? "—"}`, `Тип робіт: ${payload.workType || "—"}`, `Обсяг робіт: ${payload.volume || "Не вказано"}`);
   if (payload.team) lines.push(`Бригада: ${payload.team.join(", ") || "Не призначена"}`);
   if (payload.vehicles) lines.push(`Автомобілі: ${payload.vehicles.join(", ") || "Не призначені"}`);

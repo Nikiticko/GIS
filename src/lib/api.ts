@@ -16,12 +16,11 @@ export interface ScheduleRow extends ProjectRow { managerName: string; employeeI
 export interface ProjectDetail extends ProjectRow {
   managerName: string;
   managerPhone: string | null;
-  creatorName: string;
   team: { id: string; name: string; phone: string | null; responsible: boolean }[];
   vehicles: Pick<Vehicle, "id" | "name" | "registration">[];
 }
 export interface Attachment { id: string; projectId: string; uploaderId: string; name: string; contentType: string; size: number; createdAt: string }
-export interface Notification { id: string; type: string; projectId: string | null; projectName: string | null; subjectName: string | null; canOpen: boolean; createdAt: string; readAt: string | null; payload: { actor: string; projectName: string; manager?: string; start?: string | null; end?: string | null; workType?: string; volume?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] } | null }
+export interface Notification { id: string; type: string; projectId: string | null; projectName: string | null; canOpen: boolean; createdAt: string; readAt: string | null; payload: { projectName: string; manager?: string; start?: string | null; end?: string | null; workType?: string; volume?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] } | null }
 export interface AuditEntry { id: string; actorId: string; entityType: string; entityId: string; action: string; field: string | null; oldValue: string | null; newValue: string | null; createdAt: string }
 export interface Conflict { resourceId: string; resourceName: string; projectId: string; projectName: string; overlapStart: string; overlapEnd: string }
 export interface Conflicts { employees: Conflict[]; vehicles: Conflict[] }

@@ -43,7 +43,7 @@ export const attachments = pgTable("attachments", {
 export const notifications = pgTable("notifications", {
   id: id(), userId: uuid("user_id").notNull().references(() => users.id), type: text("type").notNull(), projectId: uuid("project_id").references(() => projects.id), subjectUserId: uuid("subject_user_id").references(() => users.id), payload: jsonb("payload").$type<NotificationPayload>(), createdAt: createdAt(), readAt: timestamp("read_at", { withTimezone: true }),
 }, (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)]);
-export type NotificationPayload = { actor: string; projectName: string; manager?: string; start?: string | null; end?: string | null; workType?: string; volume?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] };
+export type NotificationPayload = { projectName: string; manager?: string; start?: string | null; end?: string | null; workType?: string; volume?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] };
 export const telegramLinks = pgTable("telegram_links", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull().unique(),
