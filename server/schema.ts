@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, date, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, date, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
@@ -44,6 +44,27 @@ export const notifications = pgTable("notifications", {
   id: id(), userId: uuid("user_id").notNull().references(() => users.id), type: text("type").notNull(), projectId: uuid("project_id").references(() => projects.id), subjectUserId: uuid("subject_user_id").references(() => users.id), payload: jsonb("payload").$type<NotificationPayload>(), createdAt: createdAt(), readAt: timestamp("read_at", { withTimezone: true }),
 }, (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)]);
 export type NotificationPayload = { actor: string; projectName: string; manager?: string; start?: string | null; end?: string | null; workType?: string; volume?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] };
+export const telegramLinks = pgTable("telegram_links", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull().unique(),
+  chatId: bigint("chat_id", { mode: "number" }).notNull(),
+  username: text("username"),
+  createdAt: createdAt(),
+});
+export const telegramLinkTokens = pgTable("telegram_link_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdAt: createdAt(),
+}, (t) => [index("telegram_link_tokens_user_idx").on(t.userId)]);
+export const telegramDeliveries = pgTable("telegram_deliveries", {
+  notificationId: uuid("notification_id").primaryKey().references(() => notifications.id, { onDelete: "cascade" }),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  lastError: text("last_error"),
+}, (t) => [index("telegram_deliveries_pending_idx").on(t.nextAttemptAt).where(sql`${t.sentAt} is null`)]);
 export const audit = pgTable("audit", {
   id: id(), actorId: uuid("actor_id").notNull().references(() => users.id), entityType: text("entity_type").notNull(), entityId: uuid("entity_id").notNull(), action: text("action").notNull(), field: text("field"), oldValue: text("old_value"), newValue: text("new_value"), createdAt: createdAt(),
 }, (t) => [index("audit_entity_idx").on(t.entityType, t.entityId), index("audit_created_idx").on(t.createdAt)]);

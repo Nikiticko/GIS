@@ -8,11 +8,11 @@ import { mkdir, rm, statfs, rename, readdir, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { dirname, resolve } from "node:path";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
-import { and, eq, gt, inArray, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, isNotNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
-import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
+import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
 if (process.env.NODE_ENV !== "production") {
@@ -77,6 +77,10 @@ const sessionMaxAge = 365 * 24 * 60 * 60;
 const sessionId = (token: string) => `sha256:${createHash("sha256").update(token).digest("hex")}`;
 const validSession = (token: string | undefined): token is string => Boolean(token && /^[a-f0-9]{64}$/.test(token));
 const sessionAlive = sql`${sessions.createdAt} > now() - interval '365 days'`;
+const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+const telegramUsername = process.env.TELEGRAM_BOT_USERNAME?.replace(/^@/, "");
+const telegramWebhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
+const telegramWebhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
 const uploadingProjects = new Set<string>();
 let reservedUploadBytes = 0;
 
@@ -109,7 +113,8 @@ app.post("/api/auth/login", async (request, reply) => {
       const [matched] = await tx.select().from(users).where(eq(users.keyCode, parsed.data.code)).for("update");
       if (!matched?.active) return undefined;
       await tx.insert(sessions).values({ id: sessionId(token), userId: matched.id });
-      return matched;
+      const [link] = await tx.select({ userId: telegramLinks.userId }).from(telegramLinks).where(eq(telegramLinks.userId, matched.id));
+      return { ...matched, telegramLinked: Boolean(link) };
     }) : undefined;
   } catch (error) {
     await releaseAttempt();
@@ -120,13 +125,13 @@ app.post("/api/auth/login", async (request, reply) => {
   }
   await releaseAttempt();
   reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: sessionMaxAge });
-  return { id: user.id, name: user.name, role: user.role };
+  return { id: user.id, name: user.name, role: user.role, telegramLinked: user.telegramLinked };
 });
 
 app.get("/api/auth/me", async (request, reply) => {
   const user = await currentUser(request.cookies[sessionCookie]);
   if (!user) return reply.code(401).send({ error: "Сесію завершено." });
-  return { id: user.id, name: user.name, role: user.role };
+  return user;
 });
 app.post("/api/auth/logout", async (request, reply) => {
   const token = request.cookies[sessionCookie];
@@ -142,8 +147,8 @@ const updateUser = createUser.partial().extend({ active: z.boolean().optional(),
 
 async function currentUser(token: string | undefined) {
   if (!validSession(token)) return undefined;
-  const [user] = await db.select({ id: users.id, name: users.name, role: users.role, active: users.active }).from(sessions)
-    .innerJoin(users, eq(sessions.userId, users.id)).where(and(eq(sessions.id, sessionId(token)), sessionAlive)).limit(1);
+  const [user] = await db.select({ id: users.id, name: users.name, role: users.role, active: users.active, telegramLinked: sql<boolean>`${telegramLinks.userId} is not null` }).from(sessions)
+    .innerJoin(users, eq(sessions.userId, users.id)).leftJoin(telegramLinks, eq(telegramLinks.userId, users.id)).where(and(eq(sessions.id, sessionId(token)), sessionAlive)).limit(1);
   return user?.active ? user : undefined;
 }
 
@@ -167,6 +172,13 @@ async function describeChanges(tx: Transaction, changes: { field: string; before
     return { field: notificationFields[field] ?? field, before: translate(before), after: translate(after) };
   });
 }
+async function createNotifications(tx: Transaction, values: { userId: string; type: string; projectId: string; subjectUserId: string; payload: NotificationPayload }[]) {
+  const created = await tx.insert(notifications).values(values).returning({ id: notifications.id, userId: notifications.userId });
+  const linked = await tx.select({ userId: telegramLinks.userId }).from(telegramLinks).where(inArray(telegramLinks.userId, created.map((item) => item.userId)));
+  const linkedIds = new Set(linked.map((item) => item.userId));
+  const deliveries = created.filter((item) => linkedIds.has(item.userId)).map((item) => ({ notificationId: item.id }));
+  if (deliveries.length) await tx.insert(telegramDeliveries).values(deliveries);
+}
 async function notifyProject(tx: Transaction, actor: { id: string; name: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = [], previousWorkers: string[] = []) {
   if (actor.role === "ADMIN") return;
   const planned = Boolean(project.plannedStart);
@@ -183,7 +195,7 @@ async function notifyProject(tx: Transaction, actor: { id: string; name: string;
   const cars = await tx.select({ name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, project.id));
   const payload: NotificationPayload = { actor: actor.name, projectName: project.name, ...(event === "created" || event === "planned" ? { manager: manager?.name ?? "", start: planned ? project.plannedStart : project.desiredStart, end: planned ? project.plannedEnd : project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, ...(planned ? { team: assigned.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`) } : {}) } : {}), ...(changes.length ? { changes } : {}) };
   const type = { created: "PROJECT_CREATED_V2", planned: "PROJECT_PLANNED", changed: "PROJECT_CHANGED", archived: "PROJECT_ARCHIVED_V2" }[event];
-  await tx.insert(notifications).values([...recipients].map((userId) => ({ userId, type, projectId: project.id, subjectUserId: actor.id, payload })));
+  await createNotifications(tx, [...recipients].map((userId) => ({ userId, type, projectId: project.id, subjectUserId: actor.id, payload })));
 }
 async function sessionStillValid(tx: Transaction, token: string | undefined, actor: { id: string; role: string }) {
   if (!validSession(token)) return "unauthorized" as const;
@@ -206,7 +218,41 @@ app.get("/api/users", async (request, reply) => {
   if (!actor) return;
   return db.transaction(async (tx) => {
     if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
-    return tx.select().from(users);
+    return tx.select({ id: users.id, name: users.name, role: users.role, phone: users.phone, active: users.active, foreman: users.foreman, keyCode: users.keyCode, createdAt: users.createdAt, updatedAt: users.updatedAt, telegramLinked: sql<boolean>`${telegramLinks.userId} is not null`, telegramUsername: telegramLinks.username }).from(users).leftJoin(telegramLinks, eq(telegramLinks.userId, users.id));
+  });
+});
+
+app.post("/api/telegram/link", async (request, reply) => {
+  const actor = await currentUser(request.cookies[sessionCookie]);
+  if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
+  if (!telegramToken || !telegramUsername || !telegramWebhookSecret) return reply.code(503).send({ error: "Telegram-бот ще не налаштований." });
+  const rawToken = randomBytes(24).toString("base64url");
+  const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+  const result = await db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    const [linked] = await tx.select({ userId: telegramLinks.userId }).from(telegramLinks).where(eq(telegramLinks.userId, actor.id));
+    if (linked) return "linked" as const;
+    await tx.delete(telegramLinkTokens).where(and(eq(telegramLinkTokens.userId, actor.id), isNull(telegramLinkTokens.usedAt)));
+    await tx.insert(telegramLinkTokens).values({ tokenHash, userId: actor.id, expiresAt: new Date(Date.now() + 10 * 60_000) });
+    return "created" as const;
+  });
+  if (result === "linked") return reply.code(409).send({ error: "Telegram уже підключено." });
+  return { url: `https://t.me/${telegramUsername}?start=${rawToken}` };
+});
+
+app.delete("/api/users/:id/telegram", async (request, reply) => {
+  const actor = await requireAdmin(request, reply);
+  if (!actor) return;
+  const params = uuidParam.safeParse(request.params);
+  if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
+  return db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    const pending = await tx.select({ id: telegramDeliveries.notificationId }).from(telegramDeliveries).innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).where(and(eq(notifications.userId, params.data.id), isNull(telegramDeliveries.sentAt)));
+    if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
+    const [removed] = await tx.delete(telegramLinks).where(eq(telegramLinks.userId, params.data.id)).returning({ userId: telegramLinks.userId });
+    if (!removed) return reply.code(404).send({ error: "Telegram не підключено." });
+    await tx.insert(audit).values({ actorId: actor.id, entityType: "user", entityId: params.data.id, action: "TELEGRAM_UNLINK" });
+    return { ok: true };
   });
 });
 
@@ -716,6 +762,90 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
   return { ok: true };
 });
 
+type TelegramResponse = { ok: boolean; description?: string };
+async function telegramRequest(method: string, body: object): Promise<void> {
+  if (!telegramToken) throw new Error("Telegram bot is not configured");
+  const response = await fetch(`https://api.telegram.org/bot${telegramToken}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const result = await response.json() as TelegramResponse;
+  if (!response.ok || !result.ok) throw new Error(result.description || `Telegram HTTP ${response.status}`);
+}
+
+const telegramUpdate = z.object({
+  message: z.object({
+    text: z.string(),
+    chat: z.object({ id: z.number() }),
+    from: z.object({ id: z.number(), username: z.string().optional() }),
+  }).optional(),
+}).passthrough();
+
+app.post("/api/telegram/webhook", async (request, reply) => {
+  if (!telegramWebhookSecret || request.headers["x-telegram-bot-api-secret-token"] !== telegramWebhookSecret) return reply.code(403).send({ ok: false });
+  const update = telegramUpdate.safeParse(request.body);
+  if (!update.success || !update.data.message) return { ok: true };
+  const { message } = update.data;
+  const start = /^\/start(?:@\w+)?\s+([A-Za-z0-9_-]+)$/.exec(message.text.trim());
+  if (!start) return { ok: true };
+  const tokenHash = createHash("sha256").update(start[1]).digest("hex");
+  const result = await db.transaction(async (tx) => {
+    const [token] = await tx.select().from(telegramLinkTokens).where(and(eq(telegramLinkTokens.tokenHash, tokenHash), isNull(telegramLinkTokens.usedAt), gt(telegramLinkTokens.expiresAt, new Date()))).for("update");
+    if (!token) return "expired" as const;
+    const [userLink] = await tx.select().from(telegramLinks).where(eq(telegramLinks.userId, token.userId));
+    if (userLink) {
+      await tx.update(telegramLinkTokens).set({ usedAt: new Date() }).where(eq(telegramLinkTokens.tokenHash, tokenHash));
+      return "already-linked" as const;
+    }
+    const [telegramLink] = await tx.select().from(telegramLinks).where(eq(telegramLinks.telegramUserId, message.from.id));
+    if (telegramLink) return "telegram-in-use" as const;
+    await tx.insert(telegramLinks).values({ userId: token.userId, telegramUserId: message.from.id, chatId: message.chat.id, username: message.from.username ?? null });
+    await tx.update(telegramLinkTokens).set({ usedAt: new Date() }).where(eq(telegramLinkTokens.tokenHash, tokenHash));
+    return "linked" as const;
+  });
+  const confirmation = result === "linked" ? "Telegram успішно підключено до GIS." : result === "telegram-in-use" ? "Цей Telegram уже підключено до іншого користувача GIS." : result === "already-linked" ? "До вашого профілю GIS уже підключено Telegram." : "Посилання недійсне або його термін дії минув. Створіть нове посилання в GIS.";
+  try { await telegramRequest("sendMessage", { chat_id: message.chat.id, text: confirmation }); }
+  catch (error) { request.log.error({ error: error instanceof Error ? error.message : "unknown" }, "Не вдалося надіслати підтвердження Telegram"); }
+  return { ok: true };
+});
+
+const telegramTitles: Record<string, string> = { PROJECT_CREATED: "Створено новий об’єкт", PROJECT_ARCHIVED: "Об’єкт архівовано", PROJECT_CREATED_V2: "Створено новий об’єкт", PROJECT_PLANNED: "Об’єкт заплановано", PROJECT_CHANGED: "Об’єкт змінено", PROJECT_ARCHIVED_V2: "Об’єкт архівовано" };
+function telegramMessage(type: string, payload: NotificationPayload | null) {
+  const lines = [telegramTitles[type] ?? "Системне сповіщення"];
+  if (!payload) return lines[0];
+  if (payload.projectName) lines[0] += `: ${payload.projectName}`;
+  lines.push(`Хто: ${payload.actor}`);
+  if (payload.manager !== undefined) lines.push(`Менеджер: ${payload.manager}`, `Дати: ${payload.start ?? "—"} — ${payload.end ?? "—"}`, `Тип робіт: ${payload.workType || "—"}`, `Обсяг робіт: ${payload.volume || "Не вказано"}`);
+  if (payload.team) lines.push(`Бригада: ${payload.team.join(", ") || "Не призначена"}`);
+  if (payload.vehicles) lines.push(`Автомобілі: ${payload.vehicles.join(", ") || "Не призначені"}`);
+  for (const change of payload.changes ?? []) lines.push(`${change.field}: ${change.before ?? "—"} → ${change.after ?? "—"}`);
+  return lines.join("\n");
+}
+
+let telegramDeliveryTask: Promise<void> | undefined;
+function deliverTelegramNotifications() {
+  if (!telegramToken || telegramDeliveryTask) return telegramDeliveryTask;
+  telegramDeliveryTask = (async () => {
+    const batch = await db.select({ delivery: telegramDeliveries, notification: notifications, chatId: telegramLinks.chatId }).from(telegramDeliveries)
+      .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId))
+      .where(and(isNull(telegramDeliveries.sentAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
+    for (const item of batch) {
+      try {
+        await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload) });
+        await db.update(telegramDeliveries).set({ sentAt: new Date(), lastError: null }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+      } catch (error) {
+        const attempts = item.delivery.attempts + 1;
+        const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
+        await db.update(telegramDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), lastError: (error instanceof Error ? error.message : "unknown").slice(0, 500) }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+        app.log.error({ notificationId: item.delivery.notificationId, attempts }, "Не вдалося доставити сповіщення Telegram");
+      }
+    }
+  })().catch(() => app.log.error("Не вдалося обробити чергу Telegram")).finally(() => { telegramDeliveryTask = undefined; });
+  return telegramDeliveryTask;
+}
+
 let cleanupTask: Promise<void> | undefined;
 function scheduleCleanup() {
   if (cleanupTask) return cleanupTask;
@@ -747,11 +877,14 @@ function scheduleCleanup() {
 }
 const cleanupTimer = setInterval(() => {
   void scheduleCleanup();
+  void deliverTelegramNotifications();
   void pool.query("delete from login_attempts where started_at < now() - interval '1 day'").catch(() => app.log.error("Не вдалося очистити обмеження входу"));
   void pool.query("delete from sessions where created_at <= now() - interval '365 days'").catch(() => app.log.error("Не вдалося очистити прострочені сесії"));
+  void pool.query("delete from telegram_link_tokens where expires_at < now() - interval '1 day' or used_at < now() - interval '1 day'").catch(() => app.log.error("Не вдалося очистити токени Telegram"));
 }, 60_000);
-app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; storage?.destroy(); await pool.end(); });
+app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; await telegramDeliveryTask; storage?.destroy(); await pool.end(); });
 void scheduleCleanup();
+void deliverTelegramNotifications();
 async function shutdown(signal: string) {
   app.log.info({ signal }, "Зупинка сервера");
   try {
@@ -779,8 +912,15 @@ try {
   await pool.query("select payload from notifications limit 0");
   await pool.query("select storage_deleted_at from attachments limit 0");
   await pool.query("select count from login_attempts limit 0");
+  await pool.query("select telegram_user_id from telegram_links limit 0");
   startupStage = "server";
   await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
+  if (telegramToken && telegramWebhookUrl && telegramWebhookSecret) {
+    try { await telegramRequest("setWebhook", { url: telegramWebhookUrl, secret_token: telegramWebhookSecret, allowed_updates: ["message"] }); }
+    catch (error) { app.log.error({ error: error instanceof Error ? error.message : "unknown" }, "Не вдалося налаштувати Telegram webhook"); }
+  } else if (telegramToken || telegramUsername || telegramWebhookUrl || telegramWebhookSecret) {
+    app.log.warn("Налаштування Telegram заповнені не повністю");
+  }
   app.log.info("Сервер запущено");
 } catch (error) {
   const rawCode = (error as { code?: unknown }).code;

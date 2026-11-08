@@ -1,7 +1,7 @@
 export type Role = "ADMIN" | "MANAGER" | "PRODUCTION_HEAD" | "PRODUCTION_EMPLOYEE";
 export type Status = "NEW" | "PLANNED" | "IN_PROGRESS" | "COMPLETED";
-export interface CurrentUser { id: string; name: string; role: Role }
-export interface User extends CurrentUser { phone: string | null; active: boolean; foreman: boolean; keyCode: string; updatedAt: string }
+export interface CurrentUser { id: string; name: string; role: Role; telegramLinked: boolean }
+export interface User extends CurrentUser { phone: string | null; active: boolean; foreman: boolean; keyCode: string; updatedAt: string; telegramUsername: string | null }
 export interface Employee { id: string; name: string; phone: string | null; active: boolean; foreman: boolean }
 export interface WorkType { id: string; name: string; active: boolean }
 export interface Vehicle { id: string; name: string; registration: string; active: boolean }
@@ -59,6 +59,8 @@ export const api = {
   updateUser: (id: string, values: Partial<Pick<User, "name" | "phone" | "foreman" | "active"> & { role: Exclude<Role, "ADMIN"> }> & { expectedUpdatedAt?: string }) => request<User>(`/users/${id}`, json("PATCH", values)),
   revokeSessions: (id: string) => request<{ ok: boolean }>(`/users/${id}/sessions/revoke`, { method: "POST" }),
   reissueKey: (id: string) => request<{ keyCode: string }>(`/users/${id}/key-code/reissue`, { method: "POST" }),
+  telegramLink: () => request<{ url: string }>("/telegram/link", { method: "POST" }),
+  unlinkTelegram: (id: string) => request<{ ok: boolean }>(`/users/${id}/telegram`, { method: "DELETE" }),
   employees: () => request<Employee[]>("/employees"),
   workTypes: () => request<WorkType[]>("/work-types"),
   createWorkType: (name: string) => request<WorkType>("/work-types", json("POST", { name })),

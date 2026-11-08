@@ -43,6 +43,13 @@
       "when": 1793819282888,
       "tag": "0005_nosy_wither",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794132134411,
+      "tag": "0006_black_captain_flint",
+      "breakpoints": true
     }
   ]
 }

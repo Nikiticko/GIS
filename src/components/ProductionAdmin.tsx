@@ -54,6 +54,7 @@ function UserCard({ user, pending, act }: { user: User; pending: boolean; act: (
     void act(async () => { await api.updateUser(user.id, { ...changes, expectedUpdatedAt: draft.base.updatedAt }); setDraft(null); });
   }
   return <article className="production-panel form-stack"><div><strong>{user.name}</strong> · {roles[user.role]} · {user.active ? "Активний" : "Неактивний"}</div>
+    <p>Telegram: {user.telegramLinked ? user.telegramUsername ? `@${user.telegramUsername}` : "Підключено" : "Не підключено"}</p>
     {stale && <div role="alert"><p>Профіль змінився. Завантажте актуальні дані перед збереженням.</p><Button type="button" variant="outline" onClick={() => setDraft(null)}>Завантажити актуальні дані</Button></div>}
     <label>ПІБ<Input value={values.name} onChange={(event) => edit({ name: event.target.value })} /></label><label>Телефон<Input value={values.phone} type="tel" onChange={(event) => edit({ phone: event.target.value })} /></label>
     {!admin && <label>Роль<select className="form-select" value={values.role} onChange={(event) => { const role = event.target.value as Role; edit({ role, ...(role !== "PRODUCTION_EMPLOYEE" ? { foreman: false } : {}) }); }}>{Object.entries(roles).filter(([key]) => key !== "ADMIN").map(([key, title]) => <option value={key} key={key}>{title}</option>)}</select></label>}
@@ -62,7 +63,8 @@ function UserCard({ user, pending, act }: { user: User; pending: boolean; act: (
       {!admin && <Button type="button" variant="outline" disabled={pending} onClick={() => void act(() => api.updateUser(user.id, { active: !user.active, expectedUpdatedAt: user.updatedAt }))}>{user.active ? "Деактивувати" : "Активувати"}</Button>}
       <Button type="button" variant="outline" disabled={pending} onClick={() => setShowCode((current) => !current)}>{showCode ? "Приховати код" : "Показати код"}</Button>
       <Button type="button" variant="outline" disabled={pending} onClick={() => { if (window.confirm("Перевипустити код і завершити всі сесії?")) void act(() => api.reissueKey(user.id)); }}>Перевипустити код</Button>
-      <Button type="button" variant="outline" disabled={pending} onClick={() => { if (window.confirm("Завершити всі сесії користувача?")) void act(() => api.revokeSessions(user.id)); }}>Завершити сесії</Button></div>
+      <Button type="button" variant="outline" disabled={pending} onClick={() => { if (window.confirm("Завершити всі сесії користувача?")) void act(() => api.revokeSessions(user.id)); }}>Завершити сесії</Button>
+      {user.telegramLinked && <Button type="button" variant="outline" disabled={pending} onClick={() => { if (window.confirm("Відв’язати Telegram користувача?")) void act(() => api.unlinkTelegram(user.id)); }}>Відв’язати Telegram</Button>}</div>
     {showCode && <p>Ключ-код: <strong>{user.keyCode}</strong></p>}
   </article>;
 }
@@ -96,7 +98,7 @@ function VehicleCard({ vehicle, pending, act }: { vehicle: Vehicle; pending: boo
     <div className="production-row"><Input aria-label="Назва автомобіля" value={values.name} onChange={(event) => edit({ name: event.target.value })} /><Input aria-label="Державний номер" value={values.registration} onChange={(event) => edit({ registration: event.target.value })} /><Button variant="outline" disabled={pending || !values.name.trim() || !values.registration.trim() || stale} onClick={save}>Зберегти</Button><Button variant="outline" disabled={pending} onClick={() => void act(() => api.updateVehicle(vehicle.id, { active: !vehicle.active, expected: vehicleExpected(vehicle) }))}>{vehicle.active ? "Деактивувати" : "Активувати"}</Button></div>
   </div>;
 }
-const auditActions: Record<string, string> = { CREATE: "Створення", UPDATE: "Зміна", ARCHIVE: "Архівування", DELETE: "Видалення", REISSUE_KEY_CODE: "Перевипуск ключ-коду", REVOKE_SESSIONS: "Завершення сесій" };
+const auditActions: Record<string, string> = { CREATE: "Створення", UPDATE: "Зміна", ARCHIVE: "Архівування", DELETE: "Видалення", REISSUE_KEY_CODE: "Перевипуск ключ-коду", REVOKE_SESSIONS: "Завершення сесій", TELEGRAM_UNLINK: "Відв’язування Telegram" };
 const auditEntities: Record<string, string> = { user: "Користувач", project: "Об’єкт", attachment: "Вкладення", "work-types": "Тип робіт", vehicles: "Автомобіль" };
 const auditFields: Record<string, string> = { name: "Назва / ПІБ", role: "Роль", phone: "Телефон", active: "Активність", foreman: "Бригадир", managerId: "Відповідальний менеджер", workTypeId: "Тип робіт", address: "Адреса", locationUrl: "Локація", volume: "Обсяг робіт", information: "Додаткова інформація", desiredStart: "Бажаний початок", desiredEnd: "Бажане завершення", plannedStart: "Плановий початок", plannedEnd: "Планове завершення", employees: "Команда", responsible: "Відповідальний", vehicles: "Автомобілі", registration: "Державний номер", archivedAt: "Час архівування" };
 export function ProductionAudit({ entries, users, projects, workTypes, vehicles }: { entries: AuditEntry[]; users: User[]; projects: ProjectRow[]; workTypes: WorkType[]; vehicles: Vehicle[] }) {

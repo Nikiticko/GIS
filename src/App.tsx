@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { Archive, Bell, CalendarDays, ClipboardList, HardHat, LogOut, Plus, Settings, Shield, Users } from "lucide-react";
+import { Archive, Bell, CalendarDays, ClipboardList, HardHat, LogOut, Plus, Send, Settings, Shield, Users } from "lucide-react";
 import { api, ApiError, type Attachment, type AuditEntry, type CurrentUser, type Employee, type Notification, type ProjectDetail, type ProjectRow, type ProjectValues, type ScheduleRow, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { LoginView } from "@/components/LoginView";
 import { ProductionProjectForm } from "@/components/ProductionProjectForm";
@@ -138,6 +138,7 @@ export default function App() {
   }
   async function refreshDetail(id: string) { const [project, files] = await Promise.all([api.project(id), api.attachments(id)]); setDetail(project); setAttachments(files); }
   async function logout() { await perform(async () => { await api.logout(); reset(); }); }
+  async function connectTelegram() { await perform(async () => { const { url } = await api.telegramLink(); window.location.assign(url); }); }
   function navigate(event: MouseEvent<HTMLAnchorElement>, target: Screen) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -161,7 +162,7 @@ export default function App() {
   const currentRows = effectiveScreen === "archive" ? data.archive : data.projects;
   const canEdit = Boolean(detail && !detail.project.archivedAt && (admin || head || (manager && detail.project.managerId === user.id)));
   return <div className="app-shell">
-    <header className="topbar"><div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Calendar</strong><span>ВИРОБНИЦТВО</span></div></div><div className="production-account"><span>{user.name}</span><Button variant="outline" onClick={() => void logout()} disabled={busy}><LogOut data-icon="inline-start" />Вийти</Button></div></header>
+    <header className="topbar"><div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Calendar</strong><span>ВИРОБНИЦТВО</span></div></div><div className="production-account"><span>{user.name}</span>{!user.telegramLinked && <Button variant="outline" onClick={() => void connectTelegram()} disabled={busy}><Send data-icon="inline-start" />Підключити Telegram</Button>}<Button variant="outline" onClick={() => void logout()} disabled={busy}><LogOut data-icon="inline-start" />Вийти</Button></div></header>
     <div className="production-layout"><nav className="production-nav" aria-label="Основна навігація">{nav.map(({ key, title, icon: Icon }) => <a key={key} href={paths[key]} className={`nav-link ${effectiveScreen === key ? "active" : ""}`} aria-current={effectiveScreen === key ? "page" : undefined} onClick={(event) => navigate(event, key)}><Icon size={17} />{title}</a>)}</nav>
       <main className="main-content"><div className="content-inner">
         {connectionError && <div className="connection-alert" role="alert">{connectionError} <button onClick={() => void loadSession()}>Повторити</button></div>}
