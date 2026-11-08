@@ -11,10 +11,7 @@ import { ProductionEmployeeSchedule } from "@/components/ProductionEmployeeSched
 import { ProductionMonthCalendar } from "@/components/ProductionMonthCalendar";
 import { ProjectAttachments } from "@/components/ProjectAttachments";
 import { formatDate, formatDateTime } from "@/lib/date";
-
-declare global {
-  interface Window { Telegram?: { WebApp: { initData: string; ready: () => void; expand: () => void } } }
-}
+import { telegramSdkReady } from "@/telegram-bootstrap";
 
 type Screen = "projects" | "schedule" | "archive" | "employees" | "users" | "directories" | "audit" | "notifications";
 const paths: Record<Screen, string> = { projects: "/projects", schedule: "/schedule", archive: "/archive", employees: "/employees", users: "/users", directories: "/directories", audit: "/audit", notifications: "/notifications" };
@@ -44,6 +41,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const openedProjectFromUrl = useRef<string | null>(null);
+  const initialLoadStarted = useRef(false);
 
   const refresh = useCallback(async (current: CurrentUser) => {
     const admin = current.role === "ADMIN", head = current.role === "PRODUCTION_HEAD", employee = current.role === "PRODUCTION_EMPLOYEE";
@@ -72,6 +70,7 @@ export default function App() {
   }, [reset]);
   const loadSession = useCallback(async () => {
     try {
+      await telegramSdkReady;
       let current: CurrentUser;
       const initData = window.Telegram?.WebApp.initData;
       if (initData) {
@@ -93,9 +92,15 @@ export default function App() {
     finally { setChecking(false); }
   }, [refresh, reset]);
   useEffect(() => {
-    window.Telegram?.WebApp.ready();
-    window.Telegram?.WebApp.expand();
-    void loadSession();
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    void telegramSdkReady.then(() => {
+      if (window.Telegram?.WebApp.initData) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      }
+      return loadSession();
+    });
   }, [loadSession]);
   useEffect(() => {
     const onPopState = () => { setScreen(screenFromPath(window.location.pathname)); setModal(null); setDetail(null); };

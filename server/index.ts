@@ -37,8 +37,11 @@ const db = drizzle(pool);
 app.addHook("onRequest", async (request, reply) => {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
   const origin = request.headers.origin;
+  const fetchSite = request.headers["sec-fetch-site"];
   const requestOrigin = `${request.protocol}://${request.headers.host}`;
-  if ((request.headers["sec-fetch-site"] === "cross-site" && origin !== configuredPublicOrigin) || (origin && origin !== requestOrigin && origin !== configuredPublicOrigin)) {
+  const trustedTelegramOrigin = Boolean(origin && origin === configuredPublicOrigin);
+  const sameOriginBrowserRequest = fetchSite === "same-origin";
+  if ((fetchSite === "cross-site" && !trustedTelegramOrigin) || (!sameOriginBrowserRequest && origin && origin !== requestOrigin && !trustedTelegramOrigin)) {
     return reply.code(403).send({ error: "Запит з іншого сайту заборонено." });
   }
 });
