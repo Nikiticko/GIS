@@ -7,7 +7,7 @@ import { closeSync, createReadStream, createWriteStream, mkdirSync, openSync } f
 import { mkdir, rm, statfs, rename, readdir, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { dirname, resolve } from "node:path";
-import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import { and, eq, gt, inArray, isNull, isNotNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -131,6 +131,45 @@ app.post("/api/auth/login", async (request, reply) => {
   await releaseAttempt();
   reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: sessionMaxAge });
   return { id: user.id, name: user.name, role: user.role, telegramLinked: user.telegramLinked };
+});
+
+const telegramAuthInput = z.object({ initData: z.string().min(1).max(8192) }).strict();
+const telegramWebAppUser = z.object({ id: z.number().int().positive() }).passthrough();
+function validatedTelegramUser(initData: string) {
+  if (!telegramToken) return undefined;
+  const params = new URLSearchParams(initData);
+  const receivedHash = params.get("hash");
+  const authDate = Number(params.get("auth_date"));
+  const rawUser = params.get("user");
+  if (!receivedHash || !/^[a-f0-9]{64}$/i.test(receivedHash) || !Number.isInteger(authDate) || !rawUser) return undefined;
+  const age = Math.floor(Date.now() / 1000) - authDate;
+  if (age < -60 || age > 10 * 60) return undefined;
+  params.delete("hash");
+  const dataCheckString = [...params.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join("\n");
+  const secretKey = createHmac("sha256", "WebAppData").update(telegramToken).digest();
+  const expectedHash = createHmac("sha256", secretKey).update(dataCheckString).digest();
+  const actualHash = Buffer.from(receivedHash, "hex");
+  if (actualHash.length !== expectedHash.length || !timingSafeEqual(actualHash, expectedHash)) return undefined;
+  try {
+    const parsed = telegramWebAppUser.safeParse(JSON.parse(rawUser));
+    return parsed.success ? parsed.data : undefined;
+  } catch { return undefined; }
+}
+
+app.post("/api/auth/telegram", async (request, reply) => {
+  const input = telegramAuthInput.safeParse(request.body);
+  const telegramUser = input.success ? validatedTelegramUser(input.data.initData) : undefined;
+  if (!telegramUser) return reply.code(401).send({ error: "Не вдалося підтвердити вхід через Telegram." });
+  const token = randomBytes(32).toString("hex");
+  const user = await db.transaction(async (tx) => {
+    const [matched] = await tx.select({ id: users.id, name: users.name, role: users.role, active: users.active }).from(telegramLinks).innerJoin(users, eq(users.id, telegramLinks.userId)).where(eq(telegramLinks.telegramUserId, telegramUser.id)).for("share");
+    if (!matched?.active) return undefined;
+    await tx.insert(sessions).values({ id: sessionId(token), userId: matched.id });
+    return matched;
+  });
+  if (!user) return reply.code(403).send({ error: "Telegram не прив’язано до активного користувача GIS." });
+  reply.setCookie(sessionCookie, token, { httpOnly: true, secure, sameSite: "strict", path: "/", maxAge: sessionMaxAge });
+  return { id: user.id, name: user.name, role: user.role, telegramLinked: true };
 });
 
 app.get("/api/auth/me", async (request, reply) => {
@@ -841,7 +880,7 @@ function deliverTelegramNotifications() {
       .where(and(isNull(telegramDeliveries.sentAt), isNull(telegramDeliveries.failedAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
     for (const item of batch) {
       try {
-        await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload), ...(item.notification.projectId && configuredPublicOrigin ? { reply_markup: { inline_keyboard: [[{ text: "Відкрити об’єкт", url: `${configuredPublicOrigin}/projects?project=${item.notification.projectId}` }]] } } : {}) });
+        await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload), ...(item.notification.projectId && configuredPublicOrigin ? { reply_markup: { inline_keyboard: [[{ text: "Відкрити об’єкт", web_app: { url: `${configuredPublicOrigin}/projects?project=${item.notification.projectId}` } }]] } } : {}) });
         await db.update(telegramDeliveries).set({ sentAt: new Date(), lastError: null }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
       } catch (error) {
         const attempts = item.delivery.attempts + 1;
@@ -926,7 +965,10 @@ try {
   startupStage = "server";
   await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
   if (telegramToken && telegramWebhookUrl && telegramWebhookSecret) {
-    try { await telegramRequest("setWebhook", { url: telegramWebhookUrl, secret_token: telegramWebhookSecret, allowed_updates: ["message"] }); }
+    try {
+      await telegramRequest("setWebhook", { url: telegramWebhookUrl, secret_token: telegramWebhookSecret, allowed_updates: ["message"] });
+      if (configuredPublicOrigin) await telegramRequest("setChatMenuButton", { menu_button: { type: "web_app", text: "Відкрити GIS", web_app: { url: configuredPublicOrigin } } });
+    }
     catch (error) { app.log.error({ error: error instanceof Error ? error.message : "unknown" }, "Не вдалося налаштувати Telegram webhook"); }
   } else if (telegramToken || telegramUsername || telegramWebhookUrl || telegramWebhookSecret) {
     app.log.warn("Налаштування Telegram заповнені не повністю");

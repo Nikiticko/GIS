@@ -53,6 +53,7 @@ const json = (method: string, body: unknown): RequestInit => ({ method, body: JS
 export const api = {
   me: () => request<CurrentUser>("/auth/me"),
   login: (code: string) => request<CurrentUser>("/auth/login", json("POST", { code })),
+  telegramLogin: (initData: string) => request<CurrentUser>("/auth/telegram", json("POST", { initData })),
   logout: () => request<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   users: () => request<User[]>("/users"),
   createUser: (values: { name: string; role: Exclude<Role, "ADMIN">; phone?: string | null; foreman?: boolean }) => request<User>("/users", json("POST", values)),
