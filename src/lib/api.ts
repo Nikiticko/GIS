@@ -1,7 +1,7 @@
 export type Role = "ADMIN" | "MANAGER" | "PRODUCTION_HEAD" | "PRODUCTION_EMPLOYEE";
 export type Status = "NEW" | "PLANNED" | "IN_PROGRESS" | "COMPLETED";
 export interface CurrentUser { id: string; name: string; role: Role; telegramLinked: boolean }
-export interface User extends CurrentUser { phone: string | null; active: boolean; foreman: boolean; keyCode: string; updatedAt: string; telegramUsername: string | null }
+export interface User extends CurrentUser { phone: string | null; active: boolean; foreman: boolean; keyCode: string; updatedAt: string; telegramUsername: string | null; telegramDeliveryError: boolean }
 export interface Employee { id: string; name: string; phone: string | null; active: boolean; foreman: boolean }
 export interface WorkType { id: string; name: string; active: boolean }
 export interface Vehicle { id: string; name: string; registration: string; active: boolean }

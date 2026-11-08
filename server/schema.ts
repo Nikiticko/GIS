@@ -63,8 +63,9 @@ export const telegramDeliveries = pgTable("telegram_deliveries", {
   attempts: integer("attempts").notNull().default(0),
   nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp("sent_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
   lastError: text("last_error"),
-}, (t) => [index("telegram_deliveries_pending_idx").on(t.nextAttemptAt).where(sql`${t.sentAt} is null`)]);
+}, (t) => [index("telegram_deliveries_pending_idx").on(t.nextAttemptAt).where(sql`${t.sentAt} is null and ${t.failedAt} is null`)]);
 export const audit = pgTable("audit", {
   id: id(), actorId: uuid("actor_id").notNull().references(() => users.id), entityType: text("entity_type").notNull(), entityId: uuid("entity_id").notNull(), action: text("action").notNull(), field: text("field"), oldValue: text("old_value"), newValue: text("new_value"), createdAt: createdAt(),
 }, (t) => [index("audit_entity_idx").on(t.entityType, t.entityId), index("audit_created_idx").on(t.createdAt)]);

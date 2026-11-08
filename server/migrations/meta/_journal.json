@@ -50,6 +50,13 @@
       "when": 1794132134411,
       "tag": "0006_black_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794135634270,
+      "tag": "0007_sudden_joystick",
+      "breakpoints": true
     }
   ]
 }

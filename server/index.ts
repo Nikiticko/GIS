@@ -223,7 +223,7 @@ app.get("/api/users", async (request, reply) => {
   if (!actor) return;
   return db.transaction(async (tx) => {
     if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
-    return tx.select({ id: users.id, name: users.name, role: users.role, phone: users.phone, active: users.active, foreman: users.foreman, keyCode: users.keyCode, createdAt: users.createdAt, updatedAt: users.updatedAt, telegramLinked: sql<boolean>`${telegramLinks.userId} is not null`, telegramUsername: telegramLinks.username }).from(users).leftJoin(telegramLinks, eq(telegramLinks.userId, users.id));
+    return tx.select({ id: users.id, name: users.name, role: users.role, phone: users.phone, active: users.active, foreman: users.foreman, keyCode: users.keyCode, createdAt: users.createdAt, updatedAt: users.updatedAt, telegramLinked: sql<boolean>`${telegramLinks.userId} is not null`, telegramUsername: telegramLinks.username, telegramDeliveryError: sql<boolean>`exists (select 1 from ${telegramDeliveries} inner join ${notifications} on ${notifications.id} = ${telegramDeliveries.notificationId} where ${notifications.userId} = ${users.id} and ${telegramDeliveries.failedAt} is not null)` }).from(users).leftJoin(telegramLinks, eq(telegramLinks.userId, users.id));
   });
 });
 
@@ -767,7 +767,10 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
   return { ok: true };
 });
 
-type TelegramResponse = { ok: boolean; description?: string };
+type TelegramResponse = { ok: boolean; description?: string; error_code?: number };
+class TelegramApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 async function telegramRequest(method: string, body: object): Promise<void> {
   if (!telegramToken) throw new Error("Telegram bot is not configured");
   const response = await fetch(`https://api.telegram.org/bot${telegramToken}/${method}`, {
@@ -777,7 +780,7 @@ async function telegramRequest(method: string, body: object): Promise<void> {
     signal: AbortSignal.timeout(10_000),
   });
   const result = await response.json() as TelegramResponse;
-  if (!response.ok || !result.ok) throw new Error(result.description || `Telegram HTTP ${response.status}`);
+  if (!response.ok || !result.ok) throw new TelegramApiError(result.description || `Telegram HTTP ${response.status}`, result.error_code ?? response.status);
 }
 
 const telegramUpdate = z.object({
@@ -835,16 +838,18 @@ function deliverTelegramNotifications() {
   telegramDeliveryTask = (async () => {
     const batch = await db.select({ delivery: telegramDeliveries, notification: notifications, chatId: telegramLinks.chatId }).from(telegramDeliveries)
       .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId))
-      .where(and(isNull(telegramDeliveries.sentAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
+      .where(and(isNull(telegramDeliveries.sentAt), isNull(telegramDeliveries.failedAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
     for (const item of batch) {
       try {
-        await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload) });
+        await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload), ...(item.notification.projectId && configuredPublicOrigin ? { reply_markup: { inline_keyboard: [[{ text: "Відкрити об’єкт", url: `${configuredPublicOrigin}/projects?project=${item.notification.projectId}` }]] } } : {}) });
         await db.update(telegramDeliveries).set({ sentAt: new Date(), lastError: null }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
       } catch (error) {
         const attempts = item.delivery.attempts + 1;
+        const errorMessage = (error instanceof Error ? error.message : "unknown").slice(0, 500);
+        const permanent = error instanceof TelegramApiError && (error.status === 403 || errorMessage.toLowerCase().includes("chat not found") || errorMessage.toLowerCase().includes("user is deactivated"));
         const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
-        await db.update(telegramDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), lastError: (error instanceof Error ? error.message : "unknown").slice(0, 500) }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
-        app.log.error({ notificationId: item.delivery.notificationId, attempts }, "Не вдалося доставити сповіщення Telegram");
+        await db.update(telegramDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+        app.log.error({ notificationId: item.delivery.notificationId, attempts, permanent }, "Не вдалося доставити сповіщення Telegram");
       }
     }
   })().catch(() => app.log.error("Не вдалося обробити чергу Telegram")).finally(() => { telegramDeliveryTask = undefined; });

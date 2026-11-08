@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { Archive, Bell, CalendarDays, ClipboardList, HardHat, LogOut, Plus, Send, Settings, Shield, Users } from "lucide-react";
+import { Archive, Bell, CalendarDays, CheckCircle2, ClipboardList, HardHat, LogOut, Plus, Send, Settings, Shield, Users } from "lucide-react";
 import { api, ApiError, type Attachment, type AuditEntry, type CurrentUser, type Employee, type Notification, type ProjectDetail, type ProjectRow, type ProjectValues, type ScheduleRow, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { LoginView } from "@/components/LoginView";
 import { ProductionProjectForm } from "@/components/ProductionProjectForm";
@@ -38,6 +38,8 @@ export default function App() {
   const [createDates, setCreateDates] = useState<{ desiredStart: string; desiredEnd: string }>();
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const openedProjectFromUrl = useRef<string | null>(null);
 
   const refresh = useCallback(async (current: CurrentUser) => {
     const admin = current.role === "ADMIN", head = current.role === "PRODUCTION_HEAD", employee = current.role === "PRODUCTION_EMPLOYEE";
@@ -68,7 +70,12 @@ export default function App() {
     try {
       const current = await api.me();
       if (sessionIdentity.current && (sessionIdentity.current.id !== current.id || sessionIdentity.current.role !== current.role)) { setData(initialData); setDetail(null); setModal(null); }
-      sessionIdentity.current = current; setUser(current); await refresh(current);
+      sessionIdentity.current = current; setUser(current);
+      if (current.telegramLinked && window.sessionStorage.getItem("telegramLinkPending")) {
+        window.sessionStorage.removeItem("telegramLinkPending");
+        setStatusMessage("Telegram підключено");
+      }
+      await refresh(current);
     }
     catch (error) { if (error instanceof ApiError && error.status === 401) reset(); else setConnectionError(errorMessage(error)); }
     finally { setChecking(false); }
@@ -91,6 +98,22 @@ export default function App() {
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void loadNotifications(); }, 5_000);
     return () => window.clearInterval(timer);
   }, [user?.id, user?.role, loadNotifications]);
+  useEffect(() => {
+    if (!statusMessage) return;
+    const timer = window.setTimeout(() => setStatusMessage(""), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [statusMessage]);
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get("project");
+    if (!projectId || openedProjectFromUrl.current === projectId || !/^[0-9a-f-]{36}$/i.test(projectId)) return;
+    openedProjectFromUrl.current = projectId;
+    void openProject(projectId).finally(() => {
+      params.delete("project");
+      window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
+    });
+  }, [user?.id]);
   async function reload() {
     if (!user) return;
     try { await refresh(user); }
@@ -138,7 +161,7 @@ export default function App() {
   }
   async function refreshDetail(id: string) { const [project, files] = await Promise.all([api.project(id), api.attachments(id)]); setDetail(project); setAttachments(files); }
   async function logout() { await perform(async () => { await api.logout(); reset(); }); }
-  async function connectTelegram() { await perform(async () => { const { url } = await api.telegramLink(); window.location.assign(url); }); }
+  async function connectTelegram() { await perform(async () => { const { url } = await api.telegramLink(); window.sessionStorage.setItem("telegramLinkPending", "1"); window.location.assign(url); }); }
   function navigate(event: MouseEvent<HTMLAnchorElement>, target: Screen) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
@@ -162,6 +185,7 @@ export default function App() {
   const currentRows = effectiveScreen === "archive" ? data.archive : data.projects;
   const canEdit = Boolean(detail && !detail.project.archivedAt && (admin || head || (manager && detail.project.managerId === user.id)));
   return <div className="app-shell">
+    {statusMessage && <div className="toast-message" role="status"><CheckCircle2 size={16} />{statusMessage}</div>}
     <header className="topbar"><div className="brand-lockup"><div className="brand-mark"><HardHat size={19} /></div><div><strong>GIS Calendar</strong><span>ВИРОБНИЦТВО</span></div></div><div className="production-account"><span>{user.name}</span>{!user.telegramLinked && <Button variant="outline" onClick={() => void connectTelegram()} disabled={busy}><Send data-icon="inline-start" />Підключити Telegram</Button>}<Button variant="outline" onClick={() => void logout()} disabled={busy}><LogOut data-icon="inline-start" />Вийти</Button></div></header>
     <div className="production-layout"><nav className="production-nav" aria-label="Основна навігація">{nav.map(({ key, title, icon: Icon }) => <a key={key} href={paths[key]} className={`nav-link ${effectiveScreen === key ? "active" : ""}`} aria-current={effectiveScreen === key ? "page" : undefined} onClick={(event) => navigate(event, key)}><Icon size={17} />{title}</a>)}</nav>
       <main className="main-content"><div className="content-inner">

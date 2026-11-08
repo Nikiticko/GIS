@@ -54,7 +54,7 @@ function UserCard({ user, pending, act }: { user: User; pending: boolean; act: (
     void act(async () => { await api.updateUser(user.id, { ...changes, expectedUpdatedAt: draft.base.updatedAt }); setDraft(null); });
   }
   return <article className="production-panel form-stack"><div><strong>{user.name}</strong> · {roles[user.role]} · {user.active ? "Активний" : "Неактивний"}</div>
-    <p>Telegram: {user.telegramLinked ? user.telegramUsername ? `@${user.telegramUsername}` : "Підключено" : "Не підключено"}</p>
+    <p>Telegram: {user.telegramDeliveryError ? "Помилка доставки" : user.telegramLinked ? user.telegramUsername ? `@${user.telegramUsername}` : "Підключено" : "Не підключено"}</p>
     {stale && <div role="alert"><p>Профіль змінився. Завантажте актуальні дані перед збереженням.</p><Button type="button" variant="outline" onClick={() => setDraft(null)}>Завантажити актуальні дані</Button></div>}
     <label>ПІБ<Input value={values.name} onChange={(event) => edit({ name: event.target.value })} /></label><label>Телефон<Input value={values.phone} type="tel" onChange={(event) => edit({ phone: event.target.value })} /></label>
     {!admin && <label>Роль<select className="form-select" value={values.role} onChange={(event) => { const role = event.target.value as Role; edit({ role, ...(role !== "PRODUCTION_EMPLOYEE" ? { foreman: false } : {}) }); }}>{Object.entries(roles).filter(([key]) => key !== "ADMIN").map(([key, title]) => <option value={key} key={key}>{title}</option>)}</select></label>}
