@@ -22,6 +22,10 @@ if (process.env.NODE_ENV !== "production") {
 class SessionExpired extends Error { statusCode = 401; }
 const app = Fastify({ logger: process.env.NODE_ENV === "production" ? { level: "info" } : { level: "info", file: logFile }, logController: new Fastify.LogController({ disableRequestLogging: true }), trustProxy: process.env.TRUST_PROXY || false });
 const connectionString = process.env.DATABASE_URL;
+const configuredPublicOrigin = (() => {
+  try { return process.env.TELEGRAM_WEBHOOK_URL ? new URL(process.env.TELEGRAM_WEBHOOK_URL).origin : undefined; }
+  catch { return undefined; }
+})();
 if (!connectionString) {
   app.log.fatal("Не задано DATABASE_URL");
   process.stderr.write("Не задано DATABASE_URL. Налаштуйте підключення до PostgreSQL.\n");
@@ -32,7 +36,8 @@ const db = drizzle(pool);
 app.addHook("onRequest", async (request, reply) => {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
   const origin = request.headers.origin;
-  if (request.headers["sec-fetch-site"] === "cross-site" || (origin && origin !== `${request.protocol}://${request.headers.host}`)) {
+  const requestOrigin = `${request.protocol}://${request.headers.host}`;
+  if ((request.headers["sec-fetch-site"] === "cross-site" && origin !== configuredPublicOrigin) || (origin && origin !== requestOrigin && origin !== configuredPublicOrigin)) {
     return reply.code(403).send({ error: "Запит з іншого сайту заборонено." });
   }
 });
