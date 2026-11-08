@@ -31,6 +31,10 @@ jobs:
           DOMAIN: example.invalid
           POSTGRES_PASSWORD: example
           DATABASE_URL: postgresql://gis:example@db:5432/gis
+          TELEGRAM_BOT_TOKEN: test-token
+          TELEGRAM_BOT_USERNAME: test_bot
+          TELEGRAM_WEBHOOK_URL: https://example.invalid/api/telegram/webhook
+          TELEGRAM_WEBHOOK_SECRET: test-secret
 
   deploy:
     if: github.event_name == 'push'

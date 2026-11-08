@@ -13,6 +13,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
 import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
+import { telegramDeliveryIsTerminal, telegramMessage } from "./telegram.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
 if (process.env.NODE_ENV !== "production") {
@@ -234,6 +235,12 @@ async function createNotifications(tx: Transaction, values: { userId: string; ty
   const deliveries = created.filter((item) => linkedIds.has(item.userId)).map((item) => ({ notificationId: item.id }));
   if (deliveries.length) await tx.insert(telegramDeliveries).values(deliveries);
 }
+async function deletePendingTelegramDeliveries(tx: Transaction, userId: string) {
+  const pending = await tx.select({ id: telegramDeliveries.notificationId }).from(telegramDeliveries)
+    .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId))
+    .where(and(eq(notifications.userId, userId), isNull(telegramDeliveries.sentAt)));
+  if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
+}
 async function notifyProject(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = [], previousWorkers: string[] = []) {
   if (actor.role === "ADMIN") return;
   const planned = Boolean(project.plannedStart);
@@ -244,6 +251,10 @@ async function notifyProject(tx: Transaction, actor: { id: string; role: string 
   if (actor.role === "PRODUCTION_HEAD") recipients.add(project.managerId);
   if (planned && event !== "created") for (const id of [...assigned.map((person) => person.id), ...previousWorkers]) recipients.add(id);
   recipients.delete(actor.id);
+  if (!recipients.size) return;
+  const activeRecipients = await tx.select({ id: users.id }).from(users).where(and(inArray(users.id, [...recipients]), eq(users.active, true)));
+  recipients.clear();
+  for (const recipient of activeRecipients) recipients.add(recipient.id);
   if (!recipients.size) return;
   const [manager] = await tx.select({ name: users.name }).from(users).where(eq(users.id, project.managerId));
   const [workType] = await tx.select({ name: workTypes.name }).from(workTypes).where(eq(workTypes.id, project.workTypeId));
@@ -302,8 +313,7 @@ app.delete("/api/users/:id/telegram", async (request, reply) => {
   if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
   return db.transaction(async (tx) => {
     if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
-    const pending = await tx.select({ id: telegramDeliveries.notificationId }).from(telegramDeliveries).innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).where(and(eq(notifications.userId, params.data.id), isNull(telegramDeliveries.sentAt)));
-    if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
+    await deletePendingTelegramDeliveries(tx, params.data.id);
     const [removed] = await tx.delete(telegramLinks).where(eq(telegramLinks.userId, params.data.id)).returning({ userId: telegramLinks.userId });
     if (!removed) return reply.code(404).send({ error: "Telegram не підключено." });
     await tx.insert(audit).values({ actorId: actor.id, entityType: "user", entityId: params.data.id, action: "TELEGRAM_UNLINK" });
@@ -354,6 +364,7 @@ app.patch("/api/users/:id", async (request, reply) => {
     }
     if (old.active && !updated.active) {
       await tx.delete(sessions).where(eq(sessions.userId, old.id));
+      await deletePendingTelegramDeliveries(tx, old.id);
     }
     return updated;
   });
@@ -868,37 +879,25 @@ app.post("/api/telegram/webhook", async (request, reply) => {
   return { ok: true };
 });
 
-const telegramTitles: Record<string, string> = { PROJECT_CREATED: "Створено новий об’єкт", PROJECT_ARCHIVED: "Об’єкт архівовано", PROJECT_CREATED_V2: "Створено новий об’єкт", PROJECT_PLANNED: "Об’єкт заплановано", PROJECT_CHANGED: "Об’єкт змінено", PROJECT_ARCHIVED_V2: "Об’єкт архівовано" };
-function userDate(value: string | null | undefined) {
-  const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return match ? `${match[3]}/${match[2]}/${match[1]}` : value ?? "—";
-}
-function telegramMessage(type: string, payload: NotificationPayload | null) {
-  const lines = [telegramTitles[type] ?? "Системне сповіщення"];
-  if (!payload) return lines[0];
-  if (payload.projectName) lines[0] += `: ${payload.projectName}`;
-  if (payload.manager !== undefined) lines.push(`Менеджер: ${payload.manager}`, `Дати: ${userDate(payload.start)} — ${userDate(payload.end)}`, `Тип робіт: ${payload.workType || "—"}`, `Обсяг робіт: ${payload.volume || "Не вказано"}`);
-  if (payload.team) lines.push(`Бригада: ${payload.team.join(", ") || "Не призначена"}`);
-  if (payload.vehicles) lines.push(`Автомобілі: ${payload.vehicles.join(", ") || "Не призначені"}`);
-  for (const change of payload.changes ?? []) lines.push(`${change.field}: ${userDate(change.before)} → ${userDate(change.after)}`);
-  return lines.join("\n");
-}
-
 let telegramDeliveryTask: Promise<void> | undefined;
 function deliverTelegramNotifications() {
   if (!telegramToken || telegramDeliveryTask) return telegramDeliveryTask;
   telegramDeliveryTask = (async () => {
-    const batch = await db.select({ delivery: telegramDeliveries, notification: notifications, chatId: telegramLinks.chatId }).from(telegramDeliveries)
-      .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId))
+    const batch = await db.select({ delivery: telegramDeliveries, notification: notifications, chatId: telegramLinks.chatId, userActive: users.active }).from(telegramDeliveries)
+      .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId)).innerJoin(users, eq(users.id, notifications.userId))
       .where(and(isNull(telegramDeliveries.sentAt), isNull(telegramDeliveries.failedAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
     for (const item of batch) {
+      if (!item.userActive) {
+        await db.delete(telegramDeliveries).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+        continue;
+      }
       try {
         await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload), ...(item.notification.projectId && configuredPublicOrigin ? { reply_markup: { inline_keyboard: [[{ text: "Відкрити об’єкт", web_app: { url: `${configuredPublicOrigin}/projects?project=${item.notification.projectId}` } }]] } } : {}) });
         await db.update(telegramDeliveries).set({ sentAt: new Date(), lastError: null }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
       } catch (error) {
         const attempts = item.delivery.attempts + 1;
         const errorMessage = (error instanceof Error ? error.message : "unknown").slice(0, 500);
-        const permanent = error instanceof TelegramApiError && (error.status === 403 || errorMessage.toLowerCase().includes("chat not found") || errorMessage.toLowerCase().includes("user is deactivated"));
+        const permanent = telegramDeliveryIsTerminal(attempts, error instanceof TelegramApiError ? error.status : undefined, errorMessage);
         const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
         await db.update(telegramDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
         app.log.error({ notificationId: item.delivery.notificationId, attempts, permanent }, "Не вдалося доставити сповіщення Telegram");
