@@ -869,14 +869,18 @@ app.post("/api/telegram/webhook", async (request, reply) => {
 });
 
 const telegramTitles: Record<string, string> = { PROJECT_CREATED: "Створено новий об’єкт", PROJECT_ARCHIVED: "Об’єкт архівовано", PROJECT_CREATED_V2: "Створено новий об’єкт", PROJECT_PLANNED: "Об’єкт заплановано", PROJECT_CHANGED: "Об’єкт змінено", PROJECT_ARCHIVED_V2: "Об’єкт архівовано" };
+function userDate(value: string | null | undefined) {
+  const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value ?? "—";
+}
 function telegramMessage(type: string, payload: NotificationPayload | null) {
   const lines = [telegramTitles[type] ?? "Системне сповіщення"];
   if (!payload) return lines[0];
   if (payload.projectName) lines[0] += `: ${payload.projectName}`;
-  if (payload.manager !== undefined) lines.push(`Менеджер: ${payload.manager}`, `Дати: ${payload.start ?? "—"} — ${payload.end ?? "—"}`, `Тип робіт: ${payload.workType || "—"}`, `Обсяг робіт: ${payload.volume || "Не вказано"}`);
+  if (payload.manager !== undefined) lines.push(`Менеджер: ${payload.manager}`, `Дати: ${userDate(payload.start)} — ${userDate(payload.end)}`, `Тип робіт: ${payload.workType || "—"}`, `Обсяг робіт: ${payload.volume || "Не вказано"}`);
   if (payload.team) lines.push(`Бригада: ${payload.team.join(", ") || "Не призначена"}`);
   if (payload.vehicles) lines.push(`Автомобілі: ${payload.vehicles.join(", ") || "Не призначені"}`);
-  for (const change of payload.changes ?? []) lines.push(`${change.field}: ${change.before ?? "—"} → ${change.after ?? "—"}`);
+  for (const change of payload.changes ?? []) lines.push(`${change.field}: ${userDate(change.before)} → ${userDate(change.after)}`);
   return lines.join("\n");
 }
 

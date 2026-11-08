@@ -1,4 +1,5 @@
 import type { AppData, EmployeeProfile, Project, ProjectAssignment, ProjectStatus, VehicleId } from "@/types";
+import { formatDate } from "./date.ts";
 
 export function localDate(date = new Date()) {
   const year = date.getFullYear();
@@ -95,9 +96,7 @@ export function getVehicleAvailability(
 }
 
 export function shortDate(value: string | null) {
-  if (!value) return "Дату не вказано";
-  const [year, month, day] = value.split("-");
-  return year && month && day ? `${day}/${month}/${year}` : "Дату не вказано";
+  return formatDate(value, "Дату не вказано");
 }
 
 export function dateRange(start: string | null, end: string | null) {
