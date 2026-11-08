@@ -25,6 +25,7 @@ export const projects = pgTable("production_projects", {
   creatorId: uuid("creator_id").notNull().references(() => users.id), workTypeId: uuid("work_type_id").notNull().references(() => workTypes.id),
   address: text("address"), locationUrl: text("gps"), volume: text("volume"), information: text("information"),
   desiredStart: date("desired_start"), desiredEnd: date("desired_end"), plannedStart: date("planned_start"), plannedEnd: date("planned_end"),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
   archivedAt: timestamp("archived_at", { withTimezone: true }), createdAt: createdAt(), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [check("project_location_check", sql`coalesce(length(trim(${t.address})), 0) > 0`),
   check("project_desired_dates_check", sql`(${t.desiredStart} is null and ${t.desiredEnd} is null) or (${t.desiredStart} is not null and ${t.desiredEnd} is not null and ${t.desiredEnd} >= ${t.desiredStart})`),
@@ -32,6 +33,7 @@ export const projects = pgTable("production_projects", {
   index("production_projects_manager_idx").on(t.managerId)]);
 export const assignments = pgTable("production_assignments", {
   id: id(), projectId: uuid("project_id").notNull().references(() => projects.id), userId: uuid("user_id").notNull().references(() => users.id), responsible: boolean("responsible").notNull().default(false),
+  notifiedAt: timestamp("notified_at", { withTimezone: true }),
 }, (t) => [uniqueIndex("assignment_project_user_idx").on(t.projectId, t.userId), uniqueIndex("assignment_responsible_idx").on(t.projectId).where(sql`${t.responsible}`), index("assignment_user_idx").on(t.userId)]);
 export const projectVehicles = pgTable("production_project_vehicles", {
   projectId: uuid("project_id").notNull().references(() => projects.id), vehicleId: uuid("vehicle_id").notNull().references(() => vehicles.id),
@@ -42,8 +44,15 @@ export const attachments = pgTable("attachments", {
 }, (t) => [index("attachments_project_idx").on(t.projectId), index("attachments_cleanup_idx").on(t.id).where(sql`${t.deletedAt} is not null and ${t.storageDeletedAt} is null`)]);
 export const notifications = pgTable("notifications", {
   id: id(), userId: uuid("user_id").notNull().references(() => users.id), type: text("type").notNull(), projectId: uuid("project_id").references(() => projects.id), subjectUserId: uuid("subject_user_id").references(() => users.id), payload: jsonb("payload").$type<NotificationPayload>(), createdAt: createdAt(), readAt: timestamp("read_at", { withTimezone: true }),
+  eventKey: text("event_key").unique(),
 }, (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)]);
-export type NotificationPayload = { projectName: string; manager?: string; start?: string | null; end?: string | null; workType?: string; volume?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] };
+export type NotificationPayload = { projectName: string; manager?: string; address?: string | null; locationUrl?: string | null; start?: string | null; end?: string | null; workType?: string; volume?: string | null; information?: string | null; responsible?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] };
+export const notificationBatches = pgTable("notification_batches", {
+  id: id(), userId: uuid("user_id").notNull().references(() => users.id), projectId: uuid("project_id").notNull().references(() => projects.id),
+  actorId: uuid("actor_id").notNull().references(() => users.id), payload: jsonb("payload").$type<NotificationPayload>().notNull(),
+  firstChangedAt: timestamp("first_changed_at", { withTimezone: true }).notNull().defaultNow(), lastChangedAt: timestamp("last_changed_at", { withTimezone: true }).notNull().defaultNow(),
+  sendAt: timestamp("send_at", { withTimezone: true }).notNull(),
+}, (t) => [uniqueIndex("notification_batches_project_user_idx").on(t.projectId, t.userId), index("notification_batches_send_idx").on(t.sendAt)]);
 export const telegramLinks = pgTable("telegram_links", {
   userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   telegramUserId: bigint("telegram_user_id", { mode: "number" }).notNull().unique(),

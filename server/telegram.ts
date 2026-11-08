@@ -1,10 +1,14 @@
 type TelegramNotificationPayload = {
   projectName: string;
   manager?: string;
+  address?: string | null;
+  locationUrl?: string | null;
   start?: string | null;
   end?: string | null;
   workType?: string;
   volume?: string | null;
+  information?: string | null;
+  responsible?: string | null;
   team?: string[];
   vehicles?: string[];
   changes?: { field: string; before: string | null; after: string | null }[];
@@ -17,6 +21,9 @@ const titles: Record<string, string> = {
   PROJECT_PLANNED: "Об’єкт заплановано",
   PROJECT_CHANGED: "Об’єкт змінено",
   PROJECT_ARCHIVED_V2: "Об’єкт архівовано",
+  EMPLOYEE_ASSIGNED: "Вас призначено на об’єкт",
+  EMPLOYEE_REMOVED: "Ваше призначення на об’єкт скасовано",
+  PROJECT_ARCHIVED_EMPLOYEE: "Об’єкт скасовано та архівовано",
 };
 
 function userDate(value: string | null | undefined) {
@@ -29,6 +36,10 @@ export function telegramMessage(type: string, payload: TelegramNotificationPaylo
   if (!payload) return lines[0];
   if (payload.projectName) lines[0] += `: ${payload.projectName}`;
   if (payload.manager !== undefined) lines.push(`Менеджер: ${payload.manager}`, `Дати: ${userDate(payload.start)} — ${userDate(payload.end)}`, `Тип робіт: ${payload.workType || "—"}`, `Обсяг робіт: ${payload.volume || "Не вказано"}`);
+  if (payload.address) lines.push(`Адреса: ${payload.address}`);
+  if (payload.locationUrl) lines.push(`Геолокація: ${payload.locationUrl}`);
+  if (payload.information) lines.push(`Опис робіт: ${payload.information}`);
+  if (payload.responsible) lines.push(`Відповідальний: ${payload.responsible}`);
   if (payload.team) lines.push(`Бригада: ${payload.team.join(", ") || "Не призначена"}`);
   if (payload.vehicles) lines.push(`Автомобілі: ${payload.vehicles.join(", ") || "Не призначені"}`);
   for (const change of payload.changes ?? []) lines.push(`${change.field}: ${userDate(change.before)} → ${userDate(change.after)}`);

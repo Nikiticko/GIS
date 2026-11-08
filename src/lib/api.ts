@@ -9,7 +9,7 @@ export interface Project {
   id: string; name: string; managerId: string; creatorId: string; workTypeId: string;
   address: string; locationUrl: string | null; volume: string | null; information: string | null;
   desiredStart: string | null; desiredEnd: string | null; plannedStart: string | null; plannedEnd: string | null;
-  archivedAt: string | null; createdAt: string; updatedAt: string;
+  confirmedAt: string | null; archivedAt: string | null; createdAt: string; updatedAt: string;
 }
 export interface ProjectRow { project: Project; workTypeName: string; status: Status }
 export interface ScheduleRow extends ProjectRow { managerName: string; employeeIds: string[]; team: string[]; vehicles: string[] }
@@ -20,7 +20,7 @@ export interface ProjectDetail extends ProjectRow {
   vehicles: Pick<Vehicle, "id" | "name" | "registration">[];
 }
 export interface Attachment { id: string; projectId: string; uploaderId: string; name: string; contentType: string; size: number; createdAt: string }
-export interface Notification { id: string; type: string; projectId: string | null; projectName: string | null; canOpen: boolean; createdAt: string; readAt: string | null; payload: { projectName: string; manager?: string; start?: string | null; end?: string | null; workType?: string; volume?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] } | null }
+export interface Notification { id: string; type: string; projectId: string | null; projectName: string | null; canOpen: boolean; createdAt: string; readAt: string | null; payload: { projectName: string; manager?: string; address?: string | null; locationUrl?: string | null; start?: string | null; end?: string | null; workType?: string; volume?: string | null; information?: string | null; responsible?: string | null; team?: string[]; vehicles?: string[]; changes?: { field: string; before: string | null; after: string | null }[] } | null }
 export interface AuditEntry { id: string; actorId: string; entityType: string; entityId: string; action: string; field: string | null; oldValue: string | null; newValue: string | null; createdAt: string }
 export interface Conflict { resourceId: string; resourceName: string; projectId: string; projectName: string; overlapStart: string; overlapEnd: string }
 export interface Conflicts { employees: Conflict[]; vehicles: Conflict[] }
@@ -74,6 +74,8 @@ export const api = {
   createProject: (values: ProjectValues) => request<Project>("/projects", json("POST", values)),
   updateProject: (id: string, values: Partial<ProjectValues> & { expectedUpdatedAt?: string }) => request<Project>(`/projects/${id}`, json("PATCH", values)),
   archiveProject: (id: string) => request<{ ok: boolean }>(`/projects/${id}/archive`, { method: "POST" }),
+  confirmProject: (id: string) => request<{ ok: boolean; confirmedAt: string }>(`/projects/${id}/confirm`, { method: "POST" }),
+  removePlan: (id: string) => request<{ ok: boolean }>(`/projects/${id}/planning`, { method: "DELETE" }),
   savePlan: (id: string, plan: Plan) => request<{ ok: boolean; conflicts: Conflicts }>(`/projects/${id}/planning`, json("PUT", plan)),
   availability: (id: string, start: string, end: string) => request<Availability>(`/projects/${id}/availability?${new URLSearchParams({ start, end })}`),
   attachments: (id: string) => request<Attachment[]>(`/projects/${id}/attachments`),

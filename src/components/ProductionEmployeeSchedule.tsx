@@ -39,7 +39,7 @@ export function ProductionEmployeeSchedule({ employees, rows, onOpen }: {
               const first = startDate < start ? 0 : days.indexOf(startDate);
               const last = endDate > end ? days.length - 1 : days.indexOf(endDate);
               return <button key={row.project.id} type="button" className={`employee-schedule-event status-${row.status.toLowerCase().replace("_", "-")}`} style={{ gridColumn: `${first + 2} / ${last + 3}`, gridRow: lane + 1 }} onClick={() => onOpen(row.project.id)}>
-                <strong>{row.project.name}</strong><span>Менеджер: {row.managerName}</span><span>Бригада: {row.team.join(", ") || "Не призначена"}</span><span>Автомобілі: {row.vehicles.join(", ") || "Не призначені"}</span><span>{formatDate(startDate)} — {formatDate(endDate)}</span>
+                <strong>{row.project.name} · {row.project.confirmedAt ? "100%" : "Попередньо"}</strong><span>Менеджер: {row.managerName}</span><span>Бригада: {row.team.join(", ") || "Не призначена"}</span><span>Автомобілі: {row.vehicles.join(", ") || "Не призначені"}</span><span>{formatDate(startDate)} — {formatDate(endDate)}</span>
               </button>;
             })}
           </div>;

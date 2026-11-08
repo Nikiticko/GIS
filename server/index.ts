@@ -12,7 +12,7 @@ import { and, eq, gt, inArray, isNull, isNotNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
-import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
+import { assignments, attachments, audit, notificationBatches, notifications, projects, projectVehicles, sessions, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
 import { telegramDeliveryIsTerminal, telegramMessage } from "./telegram.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
@@ -228,8 +228,11 @@ async function describeChanges(tx: Transaction, changes: { field: string; before
     return { field: notificationFields[field] ?? field, before: translate(before), after: translate(after) };
   });
 }
-async function createNotifications(tx: Transaction, values: { userId: string; type: string; projectId: string; subjectUserId: string; payload: NotificationPayload }[]) {
-  const created = await tx.insert(notifications).values(values).returning({ id: notifications.id, userId: notifications.userId });
+type NotificationValue = { userId: string; type: string; projectId: string; subjectUserId: string; payload: NotificationPayload; eventKey?: string };
+async function createNotifications(tx: Transaction, values: NotificationValue[]) {
+  if (!values.length) return;
+  const created = await tx.insert(notifications).values(values).onConflictDoNothing().returning({ id: notifications.id, userId: notifications.userId });
+  if (!created.length) return;
   const linked = await tx.select({ userId: telegramLinks.userId }).from(telegramLinks).where(inArray(telegramLinks.userId, created.map((item) => item.userId)));
   const linkedIds = new Set(linked.map((item) => item.userId));
   const deliveries = created.filter((item) => linkedIds.has(item.userId)).map((item) => ({ notificationId: item.id }));
@@ -241,27 +244,93 @@ async function deletePendingTelegramDeliveries(tx: Transaction, userId: string) 
     .where(and(eq(notifications.userId, userId), isNull(telegramDeliveries.sentAt)));
   if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
 }
-async function notifyProject(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = [], previousWorkers: string[] = []) {
-  if (actor.role === "ADMIN") return;
-  const planned = Boolean(project.plannedStart);
-  const assigned = await tx.select({ id: users.id, name: users.name }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, project.id));
-  const heads = actor.role === "MANAGER" ? await tx.select({ id: users.id }).from(users).where(and(eq(users.role, "PRODUCTION_HEAD"), eq(users.active, true))) : [];
-  const recipients = new Set<string>();
-  if (actor.role === "MANAGER") for (const head of heads) recipients.add(head.id);
-  if (actor.role === "PRODUCTION_HEAD") recipients.add(project.managerId);
-  if (planned && event !== "created") for (const id of [...assigned.map((person) => person.id), ...previousWorkers]) recipients.add(id);
-  recipients.delete(actor.id);
-  if (!recipients.size) return;
-  const activeRecipients = await tx.select({ id: users.id }).from(users).where(and(inArray(users.id, [...recipients]), eq(users.active, true)));
-  recipients.clear();
-  for (const recipient of activeRecipients) recipients.add(recipient.id);
-  if (!recipients.size) return;
+async function cancelPendingProjectChanges(tx: Transaction, projectId: string) {
+  await tx.delete(notificationBatches).where(eq(notificationBatches.projectId, projectId));
+  const pending = await tx.select({ id: telegramDeliveries.notificationId }).from(telegramDeliveries)
+    .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId))
+    .where(and(eq(notifications.projectId, projectId), eq(notifications.type, "PROJECT_CHANGED"), isNull(telegramDeliveries.sentAt)));
+  if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
+}
+async function activeRecipients(tx: Transaction, ids: Iterable<string>, actorId: string) {
+  const unique = [...new Set(ids)].filter((id) => id !== actorId);
+  if (!unique.length) return [];
+  return (await tx.select({ id: users.id }).from(users).where(and(inArray(users.id, unique), eq(users.active, true)))).map((item) => item.id);
+}
+async function projectPayload(tx: Transaction, project: typeof projects.$inferSelect, changes: NotificationChange[] = []): Promise<NotificationPayload> {
   const [manager] = await tx.select({ name: users.name }).from(users).where(eq(users.id, project.managerId));
   const [workType] = await tx.select({ name: workTypes.name }).from(workTypes).where(eq(workTypes.id, project.workTypeId));
+  const crew = await tx.select({ name: users.name, responsible: assignments.responsible }).from(assignments).innerJoin(users, eq(assignments.userId, users.id)).where(eq(assignments.projectId, project.id));
   const cars = await tx.select({ name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, project.id));
-  const payload: NotificationPayload = { projectName: project.name, ...(event === "created" || event === "planned" ? { manager: manager?.name ?? "", start: planned ? project.plannedStart : project.desiredStart, end: planned ? project.plannedEnd : project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, ...(planned ? { team: assigned.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`) } : {}) } : {}), ...(changes.length ? { changes } : {}) };
-  const type = { created: "PROJECT_CREATED_V2", planned: "PROJECT_PLANNED", changed: "PROJECT_CHANGED", archived: "PROJECT_ARCHIVED_V2" }[event];
-  await createNotifications(tx, [...recipients].map((userId) => ({ userId, type, projectId: project.id, subjectUserId: actor.id, payload })));
+  return { projectName: project.name, manager: manager?.name ?? "", address: project.address, locationUrl: project.locationUrl, start: project.plannedStart ?? project.desiredStart, end: project.plannedEnd ?? project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, information: project.information, responsible: crew.find((person) => person.responsible)?.name ?? null, team: crew.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`), ...(changes.length ? { changes } : {}) };
+}
+async function managementRecipients(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, fullCondition: boolean) {
+  if (actor.role === "MANAGER") return activeRecipients(tx, (await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"))).map((item) => item.id), actor.id);
+  if (actor.role === "PRODUCTION_HEAD") return activeRecipients(tx, [project.managerId], actor.id);
+  if (actor.role === "ADMIN" && fullCondition) {
+    const heads = await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"));
+    return activeRecipients(tx, [project.managerId, ...heads.map((item) => item.id)], actor.id);
+  }
+  return [];
+}
+function mergeChanges(existing: NotificationChange[] = [], next: NotificationChange[] = []) {
+  const merged = new Map(existing.map((change) => [change.field, { ...change }]));
+  for (const change of next) {
+    const previous = merged.get(change.field);
+    if (previous) previous.after = change.after;
+    else merged.set(change.field, { ...change });
+  }
+  return [...merged.values()].filter((change) => change.before !== change.after);
+}
+async function queueChangedNotifications(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, recipientIds: string[], changes: NotificationChange[]) {
+  if (!recipientIds.length || !changes.length) return;
+  const payload = await projectPayload(tx, project, changes);
+  const now = new Date();
+  for (const userId of recipientIds) {
+    const [pending] = await tx.select().from(notificationBatches).where(and(eq(notificationBatches.projectId, project.id), eq(notificationBatches.userId, userId))).for("update");
+    if (!pending) {
+      await tx.insert(notificationBatches).values({ userId, projectId: project.id, actorId: actor.id, payload, firstChangedAt: now, lastChangedAt: now, sendAt: new Date(now.getTime() + 120_000) });
+      continue;
+    }
+    const merged = mergeChanges(pending.payload.changes, changes);
+    if (!merged.length) {
+      await tx.delete(notificationBatches).where(eq(notificationBatches.id, pending.id));
+      continue;
+    }
+    const sendAt = new Date(Math.min(now.getTime() + 120_000, pending.firstChangedAt.getTime() + 300_000));
+    await tx.update(notificationBatches).set({ actorId: actor.id, payload: { ...payload, changes: merged }, lastChangedAt: now, sendAt }).where(eq(notificationBatches.id, pending.id));
+  }
+}
+async function notifyAssignments(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, rows: (typeof assignments.$inferSelect)[], type: "EMPLOYEE_ASSIGNED" | "EMPLOYEE_REMOVED" | "PROJECT_ARCHIVED_EMPLOYEE") {
+  const recipients = await activeRecipients(tx, rows.map((row) => row.userId), actor.id);
+  const allowed = new Set(recipients), payload = await projectPayload(tx, project);
+  await createNotifications(tx, rows.filter((row) => allowed.has(row.userId)).map((row) => ({ userId: row.userId, type, projectId: project.id, subjectUserId: actor.id, payload, eventKey: `${type}:${row.id}` })));
+  if (type === "EMPLOYEE_ASSIGNED" && rows.length) await tx.update(assignments).set({ notifiedAt: new Date() }).where(inArray(assignments.id, rows.map((row) => row.id)));
+}
+async function notifyProject(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = []) {
+  const planned = Boolean(project.plannedStart);
+  const confirmedAndPlanned = Boolean(project.confirmedAt && planned);
+  const managers = await managementRecipients(tx, actor, project, confirmedAndPlanned);
+  if (event === "created") {
+    const recipients = actor.role === "MANAGER" ? await managementRecipients(tx, actor, project, false) : [];
+    const payload = await projectPayload(tx, project);
+    await createNotifications(tx, recipients.map((userId) => ({ userId, type: "PROJECT_CREATED_V2", projectId: project.id, subjectUserId: actor.id, payload, eventKey: `PROJECT_CREATED:${project.id}:${userId}` })));
+    return;
+  }
+  if (event === "changed") {
+    await queueChangedNotifications(tx, actor, project, managers, changes);
+    return;
+  }
+  const payload = await projectPayload(tx, project);
+  const type = event === "planned" ? "PROJECT_PLANNED" : "PROJECT_ARCHIVED_V2";
+  await createNotifications(tx, managers.map((userId) => ({ userId, type, projectId: project.id, subjectUserId: actor.id, payload, eventKey: `${type}:${project.id}:${project.updatedAt.toISOString()}:${userId}` })));
+  if (event === "planned" && confirmedAndPlanned) {
+    const rows = await tx.select().from(assignments).where(and(eq(assignments.projectId, project.id), isNull(assignments.notifiedAt)));
+    await notifyAssignments(tx, actor, project, rows, "EMPLOYEE_ASSIGNED");
+  }
+  if (event === "archived" && planned) {
+    const rows = await tx.select().from(assignments).where(eq(assignments.projectId, project.id));
+    await notifyAssignments(tx, actor, project, rows, "PROJECT_ARCHIVED_EMPLOYEE");
+  }
 }
 async function sessionStillValid(tx: Transaction, token: string | undefined, actor: { id: string; role: string }) {
   if (!validSession(token)) return "unauthorized" as const;
@@ -534,9 +603,58 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
     if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
     if (actor.role !== "ADMIN" && actor.role !== "PRODUCTION_HEAD" && !(actor.role === "MANAGER" && project.managerId === actor.id)) return reply.code(403).send({ error: "Недостатньо прав." });
     const archivedAt = new Date();
-    await tx.update(projects).set({ archivedAt, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id));
+    const [archived] = await tx.update(projects).set({ archivedAt, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id)).returning();
     await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: project.id, action: "ARCHIVE", field: "archivedAt", newValue: archivedAt.toISOString() });
-    await notifyProject(tx, actor, project, "archived");
+    await cancelPendingProjectChanges(tx, project.id);
+    await notifyProject(tx, actor, archived, "archived");
+    return { ok: true };
+  });
+});
+
+app.post("/api/projects/:id/confirm", async (request, reply) => {
+  const actor = await currentUser(request.cookies[sessionCookie]);
+  if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
+  if (!["ADMIN", "MANAGER", "PRODUCTION_HEAD"].includes(actor.role)) return reply.code(403).send({ error: "Недостатньо прав." });
+  const params = uuidParam.safeParse(request.params);
+  if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
+  return db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
+    if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
+    if (actor.role === "MANAGER" && project.managerId !== actor.id) return reply.code(403).send({ error: "Недостатньо прав." });
+    if (project.confirmedAt) return { ok: true, confirmedAt: project.confirmedAt };
+    const confirmedAt = new Date();
+    const [confirmed] = await tx.update(projects).set({ confirmedAt, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id)).returning();
+    await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: project.id, action: "CONFIRM", field: "confirmedAt", newValue: confirmedAt.toISOString() });
+    if (confirmed.plannedStart) {
+      const rows = await tx.select().from(assignments).where(and(eq(assignments.projectId, project.id), isNull(assignments.notifiedAt)));
+      await notifyAssignments(tx, actor, confirmed, rows, "EMPLOYEE_ASSIGNED");
+    }
+    return { ok: true, confirmedAt };
+  });
+});
+
+app.delete("/api/projects/:id/planning", async (request, reply) => {
+  const actor = await currentUser(request.cookies[sessionCookie]);
+  if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
+  if (actor.role !== "ADMIN" && actor.role !== "PRODUCTION_HEAD") return reply.code(403).send({ error: "Недостатньо прав." });
+  const params = uuidParam.safeParse(request.params);
+  if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
+  return db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    const [project] = await tx.select().from(projects).where(eq(projects.id, params.data.id)).for("update");
+    if (!project || project.archivedAt) return reply.code(404).send({ error: "Об’єкт не знайдено." });
+    if (!project.plannedStart) return { ok: true };
+    const oldAssignments = await tx.select().from(assignments).where(eq(assignments.projectId, project.id));
+    const described = await describeChanges(tx, [{ field: "plannedStart", before: project.plannedStart, after: null }, { field: "plannedEnd", before: project.plannedEnd, after: null }, { field: "employees", before: oldAssignments.map((item) => item.userId).sort().join(","), after: null }]);
+    if (project.confirmedAt) await notifyAssignments(tx, actor, project, oldAssignments, "EMPLOYEE_REMOVED");
+    await tx.delete(notificationBatches).where(eq(notificationBatches.projectId, project.id));
+    await tx.delete(assignments).where(eq(assignments.projectId, project.id));
+    await tx.delete(projectVehicles).where(eq(projectVehicles.projectId, project.id));
+    const [updated] = await tx.update(projects).set({ plannedStart: null, plannedEnd: null, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id)).returning();
+    await tx.insert(audit).values([{ actorId: actor.id, entityType: "project", entityId: project.id, action: "UPDATE", field: "plannedStart", oldValue: project.plannedStart }, { actorId: actor.id, entityType: "project", entityId: project.id, action: "UPDATE", field: "plannedEnd", oldValue: project.plannedEnd }]);
+    const managers = await managementRecipients(tx, actor, project, Boolean(project.confirmedAt));
+    await queueChangedNotifications(tx, actor, updated, managers, described);
     return { ok: true };
   });
 });
@@ -590,8 +708,15 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     const conflicts = { employees: employeeConflicts.map(intersect), vehicles: vehicleConflicts.map(intersect) };
     if (!plan.confirmConflicts && (employeeConflicts.length || vehicleConflicts.length)) return reply.code(409).send({ error: "Виявлено перетин призначень.", conflicts });
     const [plannedProject] = await tx.update(projects).set({ plannedStart: plan.start, plannedEnd: plan.end, ...(plan.information !== undefined ? { information: plan.information } : {}), updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id)).returning();
-    await tx.delete(assignments).where(eq(assignments.projectId, project.id));
-    await tx.insert(assignments).values(plan.employeeIds.map((userId) => ({ projectId: project.id, userId, responsible: userId === plan.responsibleId })));
+    const nextIds = new Set(plan.employeeIds);
+    const removedAssignments = oldAssignments.filter((item) => !nextIds.has(item.userId));
+    const retainedAssignments = oldAssignments.filter((item) => nextIds.has(item.userId));
+    const oldIds = new Set(oldAssignments.map((item) => item.userId));
+    const addedIds = plan.employeeIds.filter((userId) => !oldIds.has(userId));
+    if (removedAssignments.length) await tx.delete(assignments).where(inArray(assignments.id, removedAssignments.map((item) => item.id)));
+    if (retainedAssignments.length) await tx.update(assignments).set({ responsible: false }).where(inArray(assignments.id, retainedAssignments.map((item) => item.id)));
+    const addedAssignments = addedIds.length ? await tx.insert(assignments).values(addedIds.map((userId) => ({ projectId: project.id, userId, responsible: false }))).returning() : [];
+    await tx.update(assignments).set({ responsible: true }).where(and(eq(assignments.projectId, project.id), eq(assignments.userId, plan.responsibleId)));
     await tx.delete(projectVehicles).where(eq(projectVehicles.projectId, project.id));
     if (plan.vehicleIds.length) await tx.insert(projectVehicles).values(plan.vehicleIds.map((vehicleId) => ({ projectId: project.id, vehicleId })));
     const oldResponsible = oldAssignments.find((item) => item.responsible)?.userId ?? null;
@@ -605,8 +730,18 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     const entries = changes.filter((change) => change.before !== change.after).map((change) => ({ actorId: actor.id, entityType: "project", entityId: project.id, action: "UPDATE", field: change.field, oldValue: change.before, newValue: change.after }));
     if (entries.length) await tx.insert(audit).values(entries);
     const changed = changes.filter((change) => change.before !== change.after);
+    const described = changed.length ? await describeChanges(tx, changed) : [];
     if (!project.plannedStart) await notifyProject(tx, actor, plannedProject, "planned");
-    else if (changed.length) await notifyProject(tx, actor, plannedProject, "changed", await describeChanges(tx, changed), oldAssignments.map((item) => item.userId));
+    else if (changed.length) await notifyProject(tx, actor, plannedProject, "changed", described);
+    if (project.plannedStart && plannedProject.confirmedAt) {
+      if (removedAssignments.length) {
+        await tx.delete(notificationBatches).where(and(eq(notificationBatches.projectId, project.id), inArray(notificationBatches.userId, removedAssignments.map((item) => item.userId))));
+        await notifyAssignments(tx, actor, plannedProject, removedAssignments, "EMPLOYEE_REMOVED");
+      }
+      if (addedAssignments.length) await notifyAssignments(tx, actor, plannedProject, addedAssignments, "EMPLOYEE_ASSIGNED");
+      const workerChanges = described.filter((change) => change.field !== notificationFields.employees);
+      if (workerChanges.length) await queueChangedNotifications(tx, actor, plannedProject, await activeRecipients(tx, retainedAssignments.map((item) => item.userId), actor.id), workerChanges);
+    }
     return { ok: true, conflicts };
   });
 });
@@ -656,7 +791,16 @@ app.patch("/api/projects/:id", async (request, reply) => {
     const [updated] = await tx.update(projects).set({ ...changes, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, old.id)).returning();
     const changed = (["name", "managerId", "workTypeId", "address", "locationUrl", "volume", "information", "desiredStart", "desiredEnd"] as const).filter((field) => old[field] !== updated[field]).map((field) => ({ field, before: old[field], after: updated[field] }));
     for (const change of changed) await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: old.id, action: "UPDATE", field: change.field, oldValue: change.before, newValue: change.after });
-    if (changed.length) await notifyProject(tx, actor, updated, "changed", await describeChanges(tx, changed));
+    if (changed.length) {
+      const described = await describeChanges(tx, changed);
+      await notifyProject(tx, actor, updated, "changed", described);
+      const workerFields = new Set(["address", "locationUrl", "workTypeId", "volume", "information"]);
+      const workerChanges = described.filter((_, index) => workerFields.has(changed[index].field));
+      if (updated.confirmedAt && updated.plannedStart && workerChanges.length) {
+        const workerIds = (await tx.select({ id: assignments.userId }).from(assignments).where(eq(assignments.projectId, updated.id))).map((item) => item.id);
+        await queueChangedNotifications(tx, actor, updated, await activeRecipients(tx, workerIds, actor.id), workerChanges);
+      }
+    }
     return updated;
   });
 });
@@ -880,28 +1024,51 @@ app.post("/api/telegram/webhook", async (request, reply) => {
 });
 
 let telegramDeliveryTask: Promise<void> | undefined;
+let notificationBatchTask: Promise<void> | undefined;
+function materializeNotificationBatches() {
+  if (notificationBatchTask) return notificationBatchTask;
+  notificationBatchTask = db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gis_notification_batches'))`);
+    const due = await tx.select().from(notificationBatches).where(lte(notificationBatches.sendAt, new Date())).orderBy(notificationBatches.sendAt).limit(50).for("update");
+    for (const item of due) {
+      await createNotifications(tx, [{ userId: item.userId, type: "PROJECT_CHANGED", projectId: item.projectId, subjectUserId: item.actorId, payload: item.payload, eventKey: `PROJECT_CHANGED_BATCH:${item.id}` }]);
+    }
+    if (due.length) await tx.delete(notificationBatches).where(inArray(notificationBatches.id, due.map((item) => item.id)));
+  }).catch(() => app.log.error("Не вдалося сформувати об’єднані сповіщення")).finally(() => { notificationBatchTask = undefined; });
+  return notificationBatchTask;
+}
 function deliverTelegramNotifications() {
   if (!telegramToken || telegramDeliveryTask) return telegramDeliveryTask;
   telegramDeliveryTask = (async () => {
-    const batch = await db.select({ delivery: telegramDeliveries, notification: notifications, chatId: telegramLinks.chatId, userActive: users.active }).from(telegramDeliveries)
-      .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId)).innerJoin(users, eq(users.id, notifications.userId))
-      .where(and(isNull(telegramDeliveries.sentAt), isNull(telegramDeliveries.failedAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
-    for (const item of batch) {
-      if (!item.userActive) {
-        await db.delete(telegramDeliveries).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
-        continue;
+    const lockClient = await pool.connect();
+    let acquired = false;
+    try {
+      const result = await lockClient.query<{ acquired: boolean }>("select pg_try_advisory_lock(hashtext('gis_telegram_delivery')) as acquired");
+      acquired = result.rows[0]?.acquired === true;
+      if (!acquired) return;
+      const batch = await db.select({ delivery: telegramDeliveries, notification: notifications, chatId: telegramLinks.chatId, userActive: users.active }).from(telegramDeliveries)
+        .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId)).innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId)).innerJoin(users, eq(users.id, notifications.userId))
+        .where(and(isNull(telegramDeliveries.sentAt), isNull(telegramDeliveries.failedAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
+      for (const item of batch) {
+        if (!item.userActive) {
+          await db.delete(telegramDeliveries).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+          continue;
+        }
+        try {
+          await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload), ...(item.notification.projectId && configuredPublicOrigin ? { reply_markup: { inline_keyboard: [[{ text: "Відкрити об’єкт", web_app: { url: `${configuredPublicOrigin}/projects?project=${item.notification.projectId}` } }]] } } : {}) });
+          await db.update(telegramDeliveries).set({ sentAt: new Date(), lastError: null }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+        } catch (error) {
+          const attempts = item.delivery.attempts + 1;
+          const errorMessage = (error instanceof Error ? error.message : "unknown").slice(0, 500);
+          const permanent = telegramDeliveryIsTerminal(attempts, error instanceof TelegramApiError ? error.status : undefined, errorMessage);
+          const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
+          await db.update(telegramDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+          app.log.error({ notificationId: item.delivery.notificationId, attempts, permanent }, "Не вдалося доставити сповіщення Telegram");
+        }
       }
-      try {
-        await telegramRequest("sendMessage", { chat_id: item.chatId, text: telegramMessage(item.notification.type, item.notification.payload), ...(item.notification.projectId && configuredPublicOrigin ? { reply_markup: { inline_keyboard: [[{ text: "Відкрити об’єкт", web_app: { url: `${configuredPublicOrigin}/projects?project=${item.notification.projectId}` } }]] } } : {}) });
-        await db.update(telegramDeliveries).set({ sentAt: new Date(), lastError: null }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
-      } catch (error) {
-        const attempts = item.delivery.attempts + 1;
-        const errorMessage = (error instanceof Error ? error.message : "unknown").slice(0, 500);
-        const permanent = telegramDeliveryIsTerminal(attempts, error instanceof TelegramApiError ? error.status : undefined, errorMessage);
-        const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
-        await db.update(telegramDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
-        app.log.error({ notificationId: item.delivery.notificationId, attempts, permanent }, "Не вдалося доставити сповіщення Telegram");
-      }
+    } finally {
+      if (acquired) await lockClient.query("select pg_advisory_unlock(hashtext('gis_telegram_delivery'))");
+      lockClient.release();
     }
   })().catch(() => app.log.error("Не вдалося обробити чергу Telegram")).finally(() => { telegramDeliveryTask = undefined; });
   return telegramDeliveryTask;
@@ -938,14 +1105,14 @@ function scheduleCleanup() {
 }
 const cleanupTimer = setInterval(() => {
   void scheduleCleanup();
-  void deliverTelegramNotifications();
+  void materializeNotificationBatches().then(() => deliverTelegramNotifications());
   void pool.query("delete from login_attempts where started_at < now() - interval '1 day'").catch(() => app.log.error("Не вдалося очистити обмеження входу"));
   void pool.query("delete from sessions where created_at <= now() - interval '365 days'").catch(() => app.log.error("Не вдалося очистити прострочені сесії"));
   void pool.query("delete from telegram_link_tokens where expires_at < now() - interval '1 day' or used_at < now() - interval '1 day'").catch(() => app.log.error("Не вдалося очистити токени Telegram"));
 }, 60_000);
-app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; await telegramDeliveryTask; storage?.destroy(); await pool.end(); });
+app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; await notificationBatchTask; await telegramDeliveryTask; storage?.destroy(); await pool.end(); });
 void scheduleCleanup();
-void deliverTelegramNotifications();
+void materializeNotificationBatches().then(() => deliverTelegramNotifications());
 async function shutdown(signal: string) {
   app.log.info({ signal }, "Зупинка сервера");
   try {

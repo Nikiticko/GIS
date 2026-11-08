@@ -29,3 +29,21 @@ test("Telegram delivery retries stop on permanent errors or after twelve attempt
   assert.equal(telegramDeliveryIsTerminal(11, 500, "Temporary error"), false);
   assert.equal(telegramDeliveryIsTerminal(12, 500, "Temporary error"), true);
 });
+
+test("assignment notification contains current operational project data", () => {
+  const message = telegramMessage("EMPLOYEE_ASSIGNED", {
+    projectName: "Об’єкт", manager: "Менеджер", address: "Київ, Хрещатик 1",
+    locationUrl: "https://maps.example/project", start: "2026-11-09", end: "2026-11-10",
+    workType: "Монтаж", volume: "100 м²", information: "Вхід з двору", responsible: "Бригадир",
+    team: ["Бригадир", "Працівник"], vehicles: ["Iveco (AA0001AA)"],
+  });
+  assert.match(message, /Вас призначено на об’єкт: Об’єкт/);
+  assert.match(message, /Адреса: Київ, Хрещатик 1/);
+  assert.match(message, /Геолокація: https:\/\/maps\.example\/project/);
+  assert.match(message, /Відповідальний: Бригадир/);
+});
+
+test("cancellation and archive messages do not imply an active assignment", () => {
+  assert.match(telegramMessage("EMPLOYEE_REMOVED", { projectName: "Об’єкт" }), /призначення.*скасовано/i);
+  assert.match(telegramMessage("PROJECT_ARCHIVED_EMPLOYEE", { projectName: "Об’єкт" }), /скасовано та архівовано/i);
+});
