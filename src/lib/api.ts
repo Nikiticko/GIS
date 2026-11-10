@@ -85,4 +85,5 @@ export const api = {
   audit: () => request<AuditEntry[]>("/audit"),
   notifications: () => request<Notification[]>("/notifications"),
   markRead: (id: string) => request<{ id: string }>(`/notifications/${id}/read`, { method: "POST" }),
+  clearNotifications: () => request<{ removed: number }>("/notifications", { method: "DELETE" }),
 };

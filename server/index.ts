@@ -817,6 +817,12 @@ app.post("/api/notifications/:id/read", async (request, reply) => {
   const [item] = await db.update(notifications).set({ readAt: new Date() }).where(and(eq(notifications.id, params.data.id), eq(notifications.userId, actor.id))).returning({ id: notifications.id });
   return item ?? reply.code(404).send({ error: "Сповіщення не знайдено." });
 });
+app.delete("/api/notifications", async (request, reply) => {
+  const actor = await currentUser(request.cookies[sessionCookie]);
+  if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
+  const removed = await db.delete(notifications).where(eq(notifications.userId, actor.id)).returning({ id: notifications.id });
+  return { removed: removed.length };
+});
 app.get("/api/audit", async (request, reply) => {
   const actor = await requireAdmin(request, reply);
   if (!actor) return;
