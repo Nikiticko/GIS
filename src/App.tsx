@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { Archive, Bell, CalendarDays, CheckCircle2, ClipboardList, HardHat, LogOut, Plus, Send, Settings, Shield, Users } from "lucide-react";
+import { Archive, Bell, CalendarDays, Car, CheckCircle2, ClipboardList, HardHat, LogOut, Plus, Send, Settings, Shield, Users } from "lucide-react";
 import { api, ApiError, type Attachment, type AuditEntry, type CurrentUser, type Employee, type Notification, type ProjectDetail, type ProjectRow, type ProjectValues, type ScheduleRow, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { LoginView } from "@/components/LoginView";
 import { ProductionProjectForm } from "@/components/ProductionProjectForm";
@@ -8,13 +8,14 @@ import { ProductionAudit, ProductionDirectories, ProductionUsers } from "@/compo
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ProductionEmployeeSchedule } from "@/components/ProductionEmployeeSchedule";
+import { ProductionVehicleSchedule } from "@/components/ProductionVehicleSchedule";
 import { ProductionMonthCalendar } from "@/components/ProductionMonthCalendar";
 import { ProjectAttachments } from "@/components/ProjectAttachments";
 import { formatDate, formatDateTime } from "@/lib/date";
 import { telegramSdkReady } from "@/telegram-bootstrap";
 
-type Screen = "projects" | "schedule" | "archive" | "employees" | "users" | "directories" | "audit" | "notifications";
-const paths: Record<Screen, string> = { projects: "/projects", schedule: "/schedule", archive: "/archive", employees: "/employees", users: "/users", directories: "/directories", audit: "/audit", notifications: "/notifications" };
+type Screen = "projects" | "schedule" | "archive" | "employees" | "vehicles_schedule" | "users" | "directories" | "audit" | "notifications";
+const paths: Record<Screen, string> = { projects: "/projects", schedule: "/schedule", archive: "/archive", employees: "/employees", vehicles_schedule: "/vehicles", users: "/users", directories: "/directories", audit: "/audit", notifications: "/notifications" };
 function screenFromPath(path: string): Screen | null {
   const normalized = path.replace(/\/+$/, "") || "/";
   if (normalized === "/") return "projects";
@@ -49,7 +50,7 @@ export default function App() {
     const [projects, schedule, archive, employees, users, workTypes, vehicles, notifications, audit] = await Promise.all([
       api.projects(), api.schedule(), employee ? Promise.resolve([]) : api.projects("archive"),
       admin || head || manager ? api.employees() : Promise.resolve([]), admin ? api.users() : Promise.resolve([]),
-      employee ? Promise.resolve([]) : api.workTypes(), admin || head ? api.vehicles() : Promise.resolve([]),
+      employee ? Promise.resolve([]) : api.workTypes(), admin || head || manager ? api.vehicles() : Promise.resolve([]),
       api.notifications(), admin ? api.audit() : Promise.resolve([]),
     ]);
     if (sessionIdentity.current?.id !== current.id || sessionIdentity.current.role !== current.role) return;
@@ -200,6 +201,7 @@ export default function App() {
     { key: "schedule", title: "Графік", icon: CalendarDays },
     ...(!employee ? [{ key: "archive" as const, title: "Архів", icon: Archive }] : []),
     ...(admin || head || manager ? [{ key: "employees" as const, title: "Працівники", icon: Users }] : []),
+    ...(admin || head || manager ? [{ key: "vehicles_schedule" as const, title: "Автомобілі", icon: Car }] : []),
     ...(admin ? [{ key: "users" as const, title: "Користувачі", icon: Users }, { key: "directories" as const, title: "Довідники", icon: Settings }, { key: "audit" as const, title: "Аудит", icon: Shield }] : []),
     { key: "notifications", title: `Сповіщення${data.notifications.some((item) => !item.readAt) ? " •" : ""}`, icon: Bell },
   ];
@@ -216,6 +218,7 @@ export default function App() {
         {(effectiveScreen === "projects" || effectiveScreen === "archive") && <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{effectiveScreen === "archive" ? "Архів об’єктів" : manager || employee ? "Мої об’єкти" : "Об’єкти"}</h1></div>{effectiveScreen === "projects" && canCreate && <Button onClick={() => { setCreateDates(undefined); setModal("create"); }}><Plus data-icon="inline-start" />Новий об’єкт</Button>}</div><ProjectList rows={currentRows} open={openProject} /></section>}
         {effectiveScreen === "schedule" && <ProductionMonthCalendar rows={data.schedule} employee={employee} onSelectDates={canCreate ? (desiredStart, desiredEnd) => { setCreateDates({ desiredStart, desiredEnd }); setModal("create"); } : undefined} onOpen={(id) => void openProject(id)} />}
         {effectiveScreen === "employees" && <ProductionEmployeeSchedule employees={data.employees} rows={data.schedule} onOpen={(id) => void openProject(id)} />}
+        {effectiveScreen === "vehicles_schedule" && <ProductionVehicleSchedule vehicles={data.vehicles} rows={data.schedule} onOpen={(id) => void openProject(id)} />}
         {effectiveScreen === "users" && admin && <ProductionUsers users={data.users} refresh={reload} />}
         {effectiveScreen === "directories" && admin && <ProductionDirectories workTypes={data.workTypes} vehicles={data.vehicles} refresh={reload} />}
         {effectiveScreen === "audit" && admin && <ProductionAudit entries={data.audit} users={data.users} projects={[...data.projects, ...data.archive]} workTypes={data.workTypes} vehicles={data.vehicles} />}

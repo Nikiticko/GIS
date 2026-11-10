@@ -485,7 +485,7 @@ app.get("/api/work-types", async (request, reply) => {
 app.get("/api/vehicles", async (request, reply) => {
   const user = await currentUser(request.cookies[sessionCookie]);
   if (!user) return reply.code(401).send({ error: "Потрібно увійти." });
-  if (user.role !== "ADMIN" && user.role !== "PRODUCTION_HEAD") return reply.code(403).send({ error: "Недостатньо прав." });
+  if (!["ADMIN", "MANAGER", "PRODUCTION_HEAD"].includes(user.role)) return reply.code(403).send({ error: "Недостатньо прав." });
   return db.select().from(vehicles);
 });
 app.post("/api/:kind", async (request, reply) => {
@@ -577,6 +577,7 @@ app.get("/api/projects", async (request, reply) => {
     project: projects, workTypeName: workTypes.name, status: statusSql,
     managerName: sql<string>`(select ${users.name} from ${users} where ${users.id} = ${projects.managerId})`,
     employeeIds: sql<string[]>`array(select ${assignments.userId} from ${assignments} where ${assignments.projectId} = ${projects.id})`,
+    vehicleIds: sql<string[]>`array(select ${projectVehicles.vehicleId} from ${projectVehicles} where ${projectVehicles.projectId} = ${projects.id})`,
     team: sql<string[]>`array(select ${users.name} from ${assignments} inner join ${users} on ${assignments.userId} = ${users.id} where ${assignments.projectId} = ${projects.id} order by ${users.name}, ${users.id})`,
     vehicles: sql<string[]>`array(select concat(${vehicles.name}, ' (', ${vehicles.registration}, ')') from ${projectVehicles} inner join ${vehicles} on ${projectVehicles.vehicleId} = ${vehicles.id} where ${projectVehicles.projectId} = ${projects.id} order by ${vehicles.name}, ${vehicles.id})`,
   }).from(projects).innerJoin(workTypes, eq(projects.workTypeId, workTypes.id)).where(and(...conditions));

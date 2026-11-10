@@ -12,7 +12,7 @@ export interface Project {
   confirmedAt: string | null; archivedAt: string | null; createdAt: string; updatedAt: string;
 }
 export interface ProjectRow { project: Project; workTypeName: string; status: Status }
-export interface ScheduleRow extends ProjectRow { managerName: string; employeeIds: string[]; team: string[]; vehicles: string[] }
+export interface ScheduleRow extends ProjectRow { managerName: string; employeeIds: string[]; vehicleIds: string[]; team: string[]; vehicles: string[] }
 export interface ProjectDetail extends ProjectRow {
   managerName: string;
   managerPhone: string | null;
