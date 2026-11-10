@@ -21,7 +21,7 @@ function screenFromPath(path: string): Screen | null {
   return (Object.keys(paths) as Screen[]).find((key) => paths[key] === normalized) ?? null;
 }
 const statuses = { NEW: "Новий", PLANNED: "Запланований", IN_PROGRESS: "У роботі", COMPLETED: "Завершений" };
-const notificationLabels: Record<string, string> = { PROJECT_CREATED: "Створено новий об’єкт", PROJECT_ARCHIVED: "Об’єкт архівовано", PROJECT_CREATED_V2: "Створено новий об’єкт", PROJECT_PLANNED: "Об’єкт заплановано", PROJECT_CHANGED: "Об’єкт змінено", PROJECT_ARCHIVED_V2: "Об’єкт архівовано", EMPLOYEE_ASSIGNED: "Вас призначено на об’єкт", EMPLOYEE_REMOVED: "Призначення скасовано", PROJECT_ARCHIVED_EMPLOYEE: "Об’єкт скасовано та архівовано" };
+const notificationLabels: Record<string, string> = { PROJECT_CREATED: "Створено новий об’єкт", PROJECT_ARCHIVED: "Об’єкт архівовано", PROJECT_CREATED_V2: "Створено новий об’єкт", PROJECT_PLANNED: "Об’єкт заплановано", PROJECT_CHANGED: "Об’єкт змінено", PROJECT_ARCHIVED_V2: "Об’єкт архівовано", EMPLOYEE_ASSIGNED: "Вас призначено на об’єкт", EMPLOYEE_REMOVED: "Призначення скасовано", PROJECT_ARCHIVED_EMPLOYEE: "Об’єкт скасовано та архівовано", PROJECT_ATTACHMENT_ADDED: "Додано нове вкладення" };
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Не вдалося виконати дію.";
 const initialData = { projects: [] as ProjectRow[], schedule: [] as ScheduleRow[], archive: [] as ProjectRow[], employees: [] as Employee[], users: [] as User[], workTypes: [] as WorkType[], vehicles: [] as Vehicle[], notifications: [] as Notification[], audit: [] as AuditEntry[] };
 type Data = typeof initialData;

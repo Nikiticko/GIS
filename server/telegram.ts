@@ -24,6 +24,7 @@ const titles: Record<string, string> = {
   EMPLOYEE_ASSIGNED: "Вас призначено на об’єкт",
   EMPLOYEE_REMOVED: "Ваше призначення на об’єкт скасовано",
   PROJECT_ARCHIVED_EMPLOYEE: "Об’єкт скасовано та архівовано",
+  PROJECT_ATTACHMENT_ADDED: "Додано нове вкладення",
 };
 
 function userDate(value: string | null | undefined) {

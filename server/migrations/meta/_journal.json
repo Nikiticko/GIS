@@ -64,6 +64,13 @@
       "when": 1794167886183,
       "tag": "0008_confirmation_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794336747631,
+      "tag": "0009_safe_hellcat",
+      "breakpoints": true
     }
   ]
 }

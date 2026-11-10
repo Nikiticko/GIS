@@ -47,3 +47,7 @@ test("cancellation and archive messages do not imply an active assignment", () =
   assert.match(telegramMessage("EMPLOYEE_REMOVED", { projectName: "Об’єкт" }), /призначення.*скасовано/i);
   assert.match(telegramMessage("PROJECT_ARCHIVED_EMPLOYEE", { projectName: "Об’єкт" }), /скасовано та архівовано/i);
 });
+
+test("new attachment notification identifies the project", () => {
+  assert.equal(telegramMessage("PROJECT_ATTACHMENT_ADDED", { projectName: "Об’єкт" }), "Додано нове вкладення: Об’єкт");
+});

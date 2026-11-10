@@ -4,7 +4,7 @@ import multipart from "@fastify/multipart";
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { Transform } from "node:stream";
 import { closeSync, createReadStream, createWriteStream, mkdirSync, openSync } from "node:fs";
-import { mkdir, rm, statfs, rename, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, statfs, rename, readdir, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { dirname, resolve } from "node:path";
 import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
@@ -12,7 +12,7 @@ import { and, eq, gt, inArray, isNull, isNotNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
-import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
+import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, telegramAttachmentDeliveries, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
 import { telegramDeliveryIsTerminal, telegramMessage } from "./telegram.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
@@ -233,7 +233,7 @@ async function describeChanges(tx: Transaction, changes: { field: string; before
   });
 }
 type NotificationValue = { userId: string; type: string; projectId: string; subjectUserId: string; payload: NotificationPayload; eventKey?: string };
-async function createNotifications(tx: Transaction, values: NotificationValue[]) {
+async function createNotifications(tx: Transaction, values: NotificationValue[], attachmentIds: string[] = [], attachmentRecipientIds?: Set<string>) {
   if (!values.length) return;
   const created = await tx.insert(notifications).values(values).onConflictDoNothing().returning({ id: notifications.id, userId: notifications.userId });
   if (!created.length) return;
@@ -241,12 +241,23 @@ async function createNotifications(tx: Transaction, values: NotificationValue[])
   const linkedIds = new Set(linked.map((item) => item.userId));
   const deliveries = created.filter((item) => linkedIds.has(item.userId)).map((item) => ({ notificationId: item.id }));
   if (deliveries.length) await tx.insert(telegramDeliveries).values(deliveries);
+  const attachmentDeliveries = created
+    .filter((item) => linkedIds.has(item.userId) && (!attachmentRecipientIds || attachmentRecipientIds.has(item.userId)))
+    .flatMap((item) => attachmentIds.map((attachmentId) => ({ notificationId: item.id, attachmentId })));
+  if (attachmentDeliveries.length) await tx.insert(telegramAttachmentDeliveries).values(attachmentDeliveries).onConflictDoNothing();
 }
 async function deletePendingTelegramDeliveries(tx: Transaction, userId: string) {
+  const pendingAttachments = await tx.select({ id: telegramAttachmentDeliveries.notificationId }).from(telegramAttachmentDeliveries)
+    .innerJoin(notifications, eq(notifications.id, telegramAttachmentDeliveries.notificationId))
+    .where(and(eq(notifications.userId, userId), isNull(telegramAttachmentDeliveries.sentAt)));
+  if (pendingAttachments.length) await tx.delete(telegramAttachmentDeliveries).where(inArray(telegramAttachmentDeliveries.notificationId, [...new Set(pendingAttachments.map((item) => item.id))]));
   const pending = await tx.select({ id: telegramDeliveries.notificationId }).from(telegramDeliveries)
     .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId))
     .where(and(eq(notifications.userId, userId), isNull(telegramDeliveries.sentAt)));
-  if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
+  if (pending.length) {
+    const notificationIds = pending.map((item) => item.id);
+    await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, notificationIds));
+  }
 }
 async function activeRecipients(tx: Transaction, ids: Iterable<string>, actorId: string) {
   const unique = [...new Set(ids)].filter((id) => id !== actorId);
@@ -260,6 +271,10 @@ async function projectPayload(tx: Transaction, project: typeof projects.$inferSe
   const cars = await tx.select({ name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, project.id));
   return { projectName: project.name, manager: manager?.name ?? "", address: project.address, locationUrl: project.locationUrl, start: project.plannedStart ?? project.desiredStart, end: project.plannedEnd ?? project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, information: project.information, responsible: crew.find((person) => person.responsible)?.name ?? null, team: crew.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`), ...(changes.length ? { changes } : {}) };
 }
+async function telegramAttachmentIds(tx: Transaction, projectId: string) {
+  const telegramFileLimit = 50 * 1024 * 1024;
+  return (await tx.select({ id: attachments.id }).from(attachments).where(and(eq(attachments.projectId, projectId), isNull(attachments.deletedAt), lte(attachments.size, telegramFileLimit)))).map((item) => item.id);
+}
 async function managementRecipients(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect) {
   if (actor.role === "MANAGER") return activeRecipients(tx, (await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"))).map((item) => item.id), actor.id);
   if (actor.role === "PRODUCTION_HEAD") return activeRecipients(tx, [project.managerId], actor.id);
@@ -269,16 +284,18 @@ async function managementRecipients(tx: Transaction, actor: { id: string; role: 
   }
   return [];
 }
-async function notifyChanged(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, recipientIds: string[], changes: NotificationChange[]) {
+async function notifyChanged(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, recipientIds: string[], changes: NotificationChange[], attachmentRecipientIds?: Set<string>) {
   if (!recipientIds.length || !changes.length) return;
   const payload = await projectPayload(tx, project, changes);
   const recipients = await activeRecipients(tx, recipientIds, actor.id);
-  await createNotifications(tx, recipients.map((userId) => ({ userId, type: "PROJECT_CHANGED", projectId: project.id, subjectUserId: actor.id, payload, eventKey: `PROJECT_CHANGED:${project.id}:${project.updatedAt.toISOString()}:${userId}` })));
+  const attachmentIds = attachmentRecipientIds?.size ? await telegramAttachmentIds(tx, project.id) : [];
+  await createNotifications(tx, recipients.map((userId) => ({ userId, type: "PROJECT_CHANGED", projectId: project.id, subjectUserId: actor.id, payload, eventKey: `PROJECT_CHANGED:${project.id}:${project.updatedAt.toISOString()}:${userId}` })), attachmentIds, attachmentRecipientIds);
 }
 async function notifyAssignments(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, rows: (typeof assignments.$inferSelect)[], type: "EMPLOYEE_ASSIGNED" | "EMPLOYEE_REMOVED" | "PROJECT_ARCHIVED_EMPLOYEE", changes: NotificationChange[] = []) {
   const recipients = await activeRecipients(tx, rows.map((row) => row.userId), actor.id);
   const allowed = new Set(recipients), payload = await projectPayload(tx, project, changes);
-  await createNotifications(tx, rows.filter((row) => allowed.has(row.userId)).map((row) => ({ userId: row.userId, type, projectId: project.id, subjectUserId: actor.id, payload, eventKey: `${type}:${row.id}` })));
+  const attachmentIds = type === "EMPLOYEE_ASSIGNED" ? await telegramAttachmentIds(tx, project.id) : [];
+  await createNotifications(tx, rows.filter((row) => allowed.has(row.userId)).map((row) => ({ userId: row.userId, type, projectId: project.id, subjectUserId: actor.id, payload, eventKey: `${type}:${row.id}` })), attachmentIds);
   if (type === "EMPLOYEE_ASSIGNED" && rows.length) await tx.update(assignments).set({ notifiedAt: new Date() }).where(inArray(assignments.id, rows.map((row) => row.id)));
 }
 async function notifyProject(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = []) {
@@ -711,7 +728,7 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
       if (removedAssignments.length) {
         await notifyAssignments(tx, actor, plannedProject, removedAssignments, "EMPLOYEE_REMOVED", described);
       }
-      if (described.length) await notifyChanged(tx, actor, plannedProject, plan.employeeIds, described);
+      if (described.length) await notifyChanged(tx, actor, plannedProject, plan.employeeIds, described, new Set(addedAssignments.map((item) => item.userId)));
     }
     return { ok: true, conflicts };
   });
@@ -875,6 +892,13 @@ app.post("/api/projects/:id/attachments", async (request, reply) => {
       const [item] = await tx.insert(attachments).values({ projectId: params.data.id, uploaderId: actor.id, name: uploadedFile.filename, storageKey: key, contentType: uploadedFile.mimetype, size }).returning();
       await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: item.id, action: "CREATE" });
       await rename(pendingPath, path);
+      if (project.confirmedAt && project.plannedStart) {
+        const crewIds = (await tx.select({ id: assignments.userId }).from(assignments).where(eq(assignments.projectId, project.id))).map((person) => person.id);
+        const recipients = await activeRecipients(tx, crewIds, actor.id);
+        const payload = await projectPayload(tx, project, [{ field: "Вкладення", before: null, after: item.name }]);
+        const telegramIds = item.size <= 50 * 1024 * 1024 ? [item.id] : [];
+        await createNotifications(tx, recipients.map((userId) => ({ userId, type: "PROJECT_ATTACHMENT_ADDED", projectId: project.id, subjectUserId: actor.id, payload, eventKey: `PROJECT_ATTACHMENT_ADDED:${item.id}:${userId}` })), telegramIds);
+      }
       return item;
     });
     return reply.code(201).send({ id: attachment.id, projectId: attachment.projectId, uploaderId: attachment.uploaderId, name: attachment.name, contentType: attachment.contentType, size: attachment.size, createdAt: attachment.createdAt });
@@ -932,6 +956,7 @@ app.delete("/api/projects/:id/attachments/:attachmentId", async (request, reply)
     if (!found) return null;
     if (actor.role !== "ADMIN" && found.uploaderId !== actor.id) return false;
     await tx.update(attachments).set({ deletedAt: new Date() }).where(eq(attachments.id, found.id));
+    await tx.delete(telegramAttachmentDeliveries).where(and(eq(telegramAttachmentDeliveries.attachmentId, found.id), isNull(telegramAttachmentDeliveries.sentAt)));
     await tx.insert(audit).values({ actorId: actor.id, entityType: "attachment", entityId: found.id, action: "DELETE" });
     return found;
   });
@@ -954,6 +979,22 @@ async function telegramRequest(method: string, body: object): Promise<void> {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(10_000),
   });
+  const result = await response.json() as TelegramResponse;
+  if (!response.ok || !result.ok) throw new TelegramApiError(result.description || `Telegram HTTP ${response.status}`, result.error_code ?? response.status);
+}
+async function telegramFileRequest(chatId: number, item: typeof attachments.$inferSelect, projectName: string) {
+  if (!telegramToken) throw new Error("Telegram bot is not configured");
+  const bytes = item.storageKey.startsWith("local/")
+    ? await readFile(localAttachmentPath(item.storageKey))
+    : storage && bucket
+      ? await storage.send(new GetObjectCommand({ Bucket: bucket, Key: item.storageKey })).then(async (object) => object.Body?.transformToByteArray())
+      : undefined;
+  if (!bytes) throw new Error("Сховище вкладень недоступне");
+  const form = new FormData();
+  form.set("chat_id", String(chatId));
+  form.set("caption", Array.from(`Вкладення до об’єкта: ${projectName}`).slice(0, 1024).join(""));
+  form.set("document", new Blob([Uint8Array.from(bytes).buffer], { type: item.contentType || "application/octet-stream" }), item.name);
+  const response = await fetch(`https://api.telegram.org/bot${telegramToken}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
   const result = await response.json() as TelegramResponse;
   if (!response.ok || !result.ok) throw new TelegramApiError(result.description || `Telegram HTTP ${response.status}`, result.error_code ?? response.status);
 }
@@ -1009,6 +1050,7 @@ function deliverTelegramNotifications() {
         .where(and(isNull(telegramDeliveries.sentAt), isNull(telegramDeliveries.failedAt), lte(telegramDeliveries.nextAttemptAt, new Date()))).orderBy(telegramDeliveries.nextAttemptAt).limit(20);
       for (const item of batch) {
         if (!item.userActive) {
+          await db.delete(telegramAttachmentDeliveries).where(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId));
           await db.delete(telegramDeliveries).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
           continue;
         }
@@ -1021,7 +1063,31 @@ function deliverTelegramNotifications() {
           const permanent = telegramDeliveryIsTerminal(attempts, error instanceof TelegramApiError ? error.status : undefined, errorMessage);
           const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
           await db.update(telegramDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(eq(telegramDeliveries.notificationId, item.delivery.notificationId));
+          if (permanent) await db.delete(telegramAttachmentDeliveries).where(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId));
           app.log.error({ notificationId: item.delivery.notificationId, attempts, permanent }, "Не вдалося доставити сповіщення Telegram");
+        }
+      }
+      const attachmentBatch = await db.select({ delivery: telegramAttachmentDeliveries, attachment: attachments, notification: notifications, chatId: telegramLinks.chatId, userActive: users.active }).from(telegramAttachmentDeliveries)
+        .innerJoin(telegramDeliveries, and(eq(telegramDeliveries.notificationId, telegramAttachmentDeliveries.notificationId), isNotNull(telegramDeliveries.sentAt)))
+        .innerJoin(notifications, eq(notifications.id, telegramAttachmentDeliveries.notificationId)).innerJoin(attachments, eq(attachments.id, telegramAttachmentDeliveries.attachmentId))
+        .innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId)).innerJoin(users, eq(users.id, notifications.userId))
+        .where(and(isNull(telegramAttachmentDeliveries.sentAt), isNull(telegramAttachmentDeliveries.failedAt), isNull(attachments.deletedAt), lte(telegramAttachmentDeliveries.nextAttemptAt, new Date())))
+        .orderBy(telegramAttachmentDeliveries.nextAttemptAt).limit(10);
+      for (const item of attachmentBatch) {
+        if (!item.userActive) {
+          await db.delete(telegramAttachmentDeliveries).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
+          continue;
+        }
+        try {
+          await telegramFileRequest(item.chatId, item.attachment, item.notification.payload?.projectName || "Об’єкт");
+          await db.update(telegramAttachmentDeliveries).set({ sentAt: new Date(), lastError: null }).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
+        } catch (error) {
+          const attempts = item.delivery.attempts + 1;
+          const errorMessage = (error instanceof Error ? error.message : "unknown").slice(0, 500);
+          const permanent = telegramDeliveryIsTerminal(attempts, error instanceof TelegramApiError ? error.status : undefined, errorMessage);
+          const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
+          await db.update(telegramAttachmentDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
+          app.log.error({ notificationId: item.delivery.notificationId, attachmentId: item.delivery.attachmentId, attempts, permanent }, "Не вдалося доставити вкладення Telegram");
         }
       }
     } finally {
@@ -1099,6 +1165,7 @@ try {
   await pool.query("select storage_deleted_at from attachments limit 0");
   await pool.query("select count from login_attempts limit 0");
   await pool.query("select telegram_user_id from telegram_links limit 0");
+  await pool.query("select notification_id from telegram_attachment_deliveries limit 0");
   startupStage = "server";
   await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
   if (telegramToken && telegramWebhookUrl && telegramWebhookSecret) {

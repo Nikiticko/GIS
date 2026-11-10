@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, boolean, check, date, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, check, date, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 const id = () => uuid("id").primaryKey().defaultRandom();
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
@@ -75,6 +75,15 @@ export const telegramDeliveries = pgTable("telegram_deliveries", {
   failedAt: timestamp("failed_at", { withTimezone: true }),
   lastError: text("last_error"),
 }, (t) => [index("telegram_deliveries_pending_idx").on(t.nextAttemptAt).where(sql`${t.sentAt} is null and ${t.failedAt} is null`)]);
+export const telegramAttachmentDeliveries = pgTable("telegram_attachment_deliveries", {
+  notificationId: uuid("notification_id").notNull().references(() => notifications.id, { onDelete: "cascade" }),
+  attachmentId: uuid("attachment_id").notNull().references(() => attachments.id, { onDelete: "cascade" }),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
+  lastError: text("last_error"),
+}, (t) => [primaryKey({ columns: [t.notificationId, t.attachmentId] }), index("telegram_attachment_deliveries_pending_idx").on(t.nextAttemptAt).where(sql`${t.sentAt} is null and ${t.failedAt} is null`)]);
 export const audit = pgTable("audit", {
   id: id(), actorId: uuid("actor_id").notNull().references(() => users.id), entityType: text("entity_type").notNull(), entityId: uuid("entity_id").notNull(), action: text("action").notNull(), field: text("field"), oldValue: text("old_value"), newValue: text("new_value"), createdAt: createdAt(),
 }, (t) => [index("audit_entity_idx").on(t.entityType, t.entityId), index("audit_created_idx").on(t.createdAt)]);
