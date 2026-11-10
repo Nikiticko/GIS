@@ -11,10 +11,9 @@ export interface Project {
   desiredStart: string | null; desiredEnd: string | null; plannedStart: string | null; plannedEnd: string | null;
   confirmedAt: string | null; archivedAt: string | null; createdAt: string; updatedAt: string;
 }
-export interface ProjectRow { project: Project; workTypeName: string; status: Status }
-export interface ScheduleRow extends ProjectRow { managerName: string; employeeIds: string[]; vehicleIds: string[]; team: string[]; vehicles: string[] }
+export interface ProjectRow { project: Project; workTypeName: string; status: Status; managerName: string }
+export interface ScheduleRow extends ProjectRow { employeeIds: string[]; vehicleIds: string[]; team: string[]; vehicles: string[] }
 export interface ProjectDetail extends ProjectRow {
-  managerName: string;
   managerPhone: string | null;
   team: { id: string; name: string; phone: string | null; responsible: boolean }[];
   vehicles: Pick<Vehicle, "id" | "name" | "registration">[];

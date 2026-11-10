@@ -637,6 +637,8 @@ button:disabled { cursor: not-allowed; }
 .schedule-filter-toggle { display: none; }
 .schedule-filter-panel { display: grid; grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(180px, 1fr)); align-items: start; gap: 14px; }
 .schedule-filter-search { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+.project-filter-panel > label { display: flex; flex-direction: column; gap: 6px; color: #536a7e; font-size: 13px; font-weight: 600; }
+.project-filter-panel:not(.has-manager-filter) .schedule-filter-search { grid-column: span 2; }
 .schedule-filter-group { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .schedule-filter-group summary { padding: 10px 12px; color: var(--navy); font-size: 13px; font-weight: 650; cursor: pointer; overflow-wrap: anywhere; }
 .schedule-filter-options { max-height: 220px; display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; overflow-y: auto; }
@@ -684,6 +686,10 @@ button:disabled { cursor: not-allowed; }
 .employee-schedule-event:focus-visible { outline: 2px solid #1a4c73; outline-offset: 1px; }
 .production-detail-grid .project-team-contact { display: block; color: inherit; font-size: inherit; }
 .project-information { white-space: pre-wrap; }
+@media (max-width: 1100px) and (min-width: 761px) {
+  .schedule-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .project-filter-panel:not(.has-manager-filter) .schedule-filter-search { grid-column: auto; }
+}
 @media (max-width: 640px) { .employee-schedule-grid { --employee-width: 140px; } .employee-schedule-person { padding: 10px; font-size: 12px; } }
 .production-month-day { z-index: 1; grid-row: 1; align-self: center; justify-self: start; width: 26px; height: 26px; margin-left: 7px; border-radius: 50%; color: #536a7e; font-size: 12px; line-height: 26px; text-align: center; pointer-events: none; }
 .production-month-day.outside-month { color: #a5b1bc; }
@@ -707,6 +713,7 @@ button:disabled { cursor: not-allowed; }
   .schedule-filter-toggle { display: inline-flex; width: 100%; }
   .schedule-filter-panel { display: none; grid-template-columns: 1fr; }
   .schedule-filter-panel.open { display: grid; }
+  .project-filter-panel:not(.has-manager-filter) .schedule-filter-search { grid-column: auto; }
   .schedule-filter-confirmed, .schedule-filter-footer { grid-column: 1; }
   .schedule-filter-footer { align-items: stretch; flex-direction: column; }
   .production-month { min-width: 0; }

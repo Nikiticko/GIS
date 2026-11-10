@@ -581,7 +581,7 @@ app.get("/api/projects", async (request, reply) => {
     team: sql<string[]>`array(select ${users.name} from ${assignments} inner join ${users} on ${assignments.userId} = ${users.id} where ${assignments.projectId} = ${projects.id} order by ${users.name}, ${users.id})`,
     vehicles: sql<string[]>`array(select concat(${vehicles.name}, ' (', ${vehicles.registration}, ')') from ${projectVehicles} inner join ${vehicles} on ${projectVehicles.vehicleId} = ${vehicles.id} where ${projectVehicles.projectId} = ${projects.id} order by ${vehicles.name}, ${vehicles.id})`,
   }).from(projects).innerJoin(workTypes, eq(projects.workTypeId, workTypes.id)).where(and(...conditions));
-  return db.select({ project: projects, workTypeName: workTypes.name, status: statusSql }).from(projects)
+  return db.select({ project: projects, workTypeName: workTypes.name, status: statusSql, managerName: sql<string>`(select ${users.name} from ${users} where ${users.id} = ${projects.managerId})` }).from(projects)
     .innerJoin(workTypes, eq(projects.workTypeId, workTypes.id)).where(and(...conditions));
 });
 
