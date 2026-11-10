@@ -12,7 +12,7 @@ import { and, eq, gt, inArray, isNull, isNotNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
-import { assignments, attachments, audit, notificationBatches, notifications, projects, projectVehicles, sessions, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
+import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
 import { telegramDeliveryIsTerminal, telegramMessage } from "./telegram.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
@@ -247,13 +247,6 @@ async function deletePendingTelegramDeliveries(tx: Transaction, userId: string) 
     .where(and(eq(notifications.userId, userId), isNull(telegramDeliveries.sentAt)));
   if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
 }
-async function cancelPendingProjectChanges(tx: Transaction, projectId: string) {
-  await tx.delete(notificationBatches).where(eq(notificationBatches.projectId, projectId));
-  const pending = await tx.select({ id: telegramDeliveries.notificationId }).from(telegramDeliveries)
-    .innerJoin(notifications, eq(notifications.id, telegramDeliveries.notificationId))
-    .where(and(eq(notifications.projectId, projectId), eq(notifications.type, "PROJECT_CHANGED"), isNull(telegramDeliveries.sentAt)));
-  if (pending.length) await tx.delete(telegramDeliveries).where(inArray(telegramDeliveries.notificationId, pending.map((item) => item.id)));
-}
 async function activeRecipients(tx: Transaction, ids: Iterable<string>, actorId: string) {
   const unique = [...new Set(ids)].filter((id) => id !== actorId);
   if (!unique.length) return [];
@@ -266,61 +259,40 @@ async function projectPayload(tx: Transaction, project: typeof projects.$inferSe
   const cars = await tx.select({ name: vehicles.name, registration: vehicles.registration }).from(projectVehicles).innerJoin(vehicles, eq(projectVehicles.vehicleId, vehicles.id)).where(eq(projectVehicles.projectId, project.id));
   return { projectName: project.name, manager: manager?.name ?? "", address: project.address, locationUrl: project.locationUrl, start: project.plannedStart ?? project.desiredStart, end: project.plannedEnd ?? project.desiredEnd, workType: workType?.name ?? "", volume: project.volume, information: project.information, responsible: crew.find((person) => person.responsible)?.name ?? null, team: crew.map((person) => person.name), vehicles: cars.map((car) => `${car.name} (${car.registration})`), ...(changes.length ? { changes } : {}) };
 }
-async function managementRecipients(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, fullCondition: boolean) {
+async function managementRecipients(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect) {
   if (actor.role === "MANAGER") return activeRecipients(tx, (await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"))).map((item) => item.id), actor.id);
   if (actor.role === "PRODUCTION_HEAD") return activeRecipients(tx, [project.managerId], actor.id);
-  if (actor.role === "ADMIN" && fullCondition) {
+  if (actor.role === "ADMIN") {
     const heads = await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"));
     return activeRecipients(tx, [project.managerId, ...heads.map((item) => item.id)], actor.id);
   }
   return [];
 }
-function mergeChanges(existing: NotificationChange[] = [], next: NotificationChange[] = []) {
-  const merged = new Map(existing.map((change) => [change.field, { ...change }]));
-  for (const change of next) {
-    const previous = merged.get(change.field);
-    if (previous) previous.after = change.after;
-    else merged.set(change.field, { ...change });
-  }
-  return [...merged.values()].filter((change) => change.before !== change.after);
-}
-async function queueChangedNotifications(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, recipientIds: string[], changes: NotificationChange[]) {
+async function notifyChanged(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, recipientIds: string[], changes: NotificationChange[]) {
   if (!recipientIds.length || !changes.length) return;
   const payload = await projectPayload(tx, project, changes);
-  const now = new Date();
-  for (const userId of recipientIds) {
-    const [pending] = await tx.select().from(notificationBatches).where(and(eq(notificationBatches.projectId, project.id), eq(notificationBatches.userId, userId))).for("update");
-    if (!pending) {
-      await tx.insert(notificationBatches).values({ userId, projectId: project.id, actorId: actor.id, payload, firstChangedAt: now, lastChangedAt: now, sendAt: new Date(now.getTime() + 120_000) });
-      continue;
-    }
-    const merged = mergeChanges(pending.payload.changes, changes);
-    if (!merged.length) {
-      await tx.delete(notificationBatches).where(eq(notificationBatches.id, pending.id));
-      continue;
-    }
-    const sendAt = new Date(Math.min(now.getTime() + 120_000, pending.firstChangedAt.getTime() + 300_000));
-    await tx.update(notificationBatches).set({ actorId: actor.id, payload: { ...payload, changes: merged }, lastChangedAt: now, sendAt }).where(eq(notificationBatches.id, pending.id));
-  }
+  const recipients = await activeRecipients(tx, recipientIds, actor.id);
+  await createNotifications(tx, recipients.map((userId) => ({ userId, type: "PROJECT_CHANGED", projectId: project.id, subjectUserId: actor.id, payload, eventKey: `PROJECT_CHANGED:${project.id}:${project.updatedAt.toISOString()}:${userId}` })));
 }
-async function notifyAssignments(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, rows: (typeof assignments.$inferSelect)[], type: "EMPLOYEE_ASSIGNED" | "EMPLOYEE_REMOVED" | "PROJECT_ARCHIVED_EMPLOYEE") {
+async function notifyAssignments(tx: Transaction, actor: { id: string }, project: typeof projects.$inferSelect, rows: (typeof assignments.$inferSelect)[], type: "EMPLOYEE_ASSIGNED" | "EMPLOYEE_REMOVED" | "PROJECT_ARCHIVED_EMPLOYEE", changes: NotificationChange[] = []) {
   const recipients = await activeRecipients(tx, rows.map((row) => row.userId), actor.id);
-  const allowed = new Set(recipients), payload = await projectPayload(tx, project);
+  const allowed = new Set(recipients), payload = await projectPayload(tx, project, changes);
   await createNotifications(tx, rows.filter((row) => allowed.has(row.userId)).map((row) => ({ userId: row.userId, type, projectId: project.id, subjectUserId: actor.id, payload, eventKey: `${type}:${row.id}` })));
   if (type === "EMPLOYEE_ASSIGNED" && rows.length) await tx.update(assignments).set({ notifiedAt: new Date() }).where(inArray(assignments.id, rows.map((row) => row.id)));
 }
 async function notifyProject(tx: Transaction, actor: { id: string; role: string }, project: typeof projects.$inferSelect, event: "created" | "planned" | "changed" | "archived", changes: NotificationChange[] = []) {
   const planned = Boolean(project.plannedStart);
   const confirmedAndPlanned = Boolean(project.confirmedAt && planned);
-  const managers = await managementRecipients(tx, actor, project, confirmedAndPlanned);
+  const managers = await managementRecipients(tx, actor, project);
   if (event === "created") {
-    const recipients = actor.role === "MANAGER" ? await managementRecipients(tx, actor, project, false) : [];
+    const heads = await tx.select({ id: users.id }).from(users).where(eq(users.role, "PRODUCTION_HEAD"));
+    const recipients = await activeRecipients(tx, heads.map((item) => item.id), actor.id);
     const payload = await projectPayload(tx, project);
     await createNotifications(tx, recipients.map((userId) => ({ userId, type: "PROJECT_CREATED_V2", projectId: project.id, subjectUserId: actor.id, payload, eventKey: `PROJECT_CREATED:${project.id}:${userId}` })));
     return;
   }
   if (event === "changed") {
-    await queueChangedNotifications(tx, actor, project, managers, changes);
+    await notifyChanged(tx, actor, project, managers, changes);
     return;
   }
   const payload = await projectPayload(tx, project);
@@ -330,7 +302,7 @@ async function notifyProject(tx: Transaction, actor: { id: string; role: string 
     const rows = await tx.select().from(assignments).where(and(eq(assignments.projectId, project.id), isNull(assignments.notifiedAt)));
     await notifyAssignments(tx, actor, project, rows, "EMPLOYEE_ASSIGNED");
   }
-  if (event === "archived" && planned) {
+  if (event === "archived" && confirmedAndPlanned) {
     const rows = await tx.select().from(assignments).where(eq(assignments.projectId, project.id));
     await notifyAssignments(tx, actor, project, rows, "PROJECT_ARCHIVED_EMPLOYEE");
   }
@@ -608,7 +580,6 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
     const archivedAt = new Date();
     const [archived] = await tx.update(projects).set({ archivedAt, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id)).returning();
     await tx.insert(audit).values({ actorId: actor.id, entityType: "project", entityId: project.id, action: "ARCHIVE", field: "archivedAt", newValue: archivedAt.toISOString() });
-    await cancelPendingProjectChanges(tx, project.id);
     await notifyProject(tx, actor, archived, "archived");
     return { ok: true };
   });
@@ -650,14 +621,13 @@ app.delete("/api/projects/:id/planning", async (request, reply) => {
     if (!project.plannedStart) return { ok: true };
     const oldAssignments = await tx.select().from(assignments).where(eq(assignments.projectId, project.id));
     const described = await describeChanges(tx, [{ field: "plannedStart", before: project.plannedStart, after: null }, { field: "plannedEnd", before: project.plannedEnd, after: null }, { field: "employees", before: oldAssignments.map((item) => item.userId).sort().join(","), after: null }]);
-    if (project.confirmedAt) await notifyAssignments(tx, actor, project, oldAssignments, "EMPLOYEE_REMOVED");
-    await tx.delete(notificationBatches).where(eq(notificationBatches.projectId, project.id));
+    if (project.confirmedAt) await notifyAssignments(tx, actor, project, oldAssignments, "EMPLOYEE_REMOVED", described);
     await tx.delete(assignments).where(eq(assignments.projectId, project.id));
     await tx.delete(projectVehicles).where(eq(projectVehicles.projectId, project.id));
     const [updated] = await tx.update(projects).set({ plannedStart: null, plannedEnd: null, updatedAt: sql`greatest(clock_timestamp(), ${projects.updatedAt} + interval '1 millisecond')` }).where(eq(projects.id, project.id)).returning();
     await tx.insert(audit).values([{ actorId: actor.id, entityType: "project", entityId: project.id, action: "UPDATE", field: "plannedStart", oldValue: project.plannedStart }, { actorId: actor.id, entityType: "project", entityId: project.id, action: "UPDATE", field: "plannedEnd", oldValue: project.plannedEnd }]);
-    const managers = await managementRecipients(tx, actor, project, Boolean(project.confirmedAt));
-    await queueChangedNotifications(tx, actor, updated, managers, described);
+    const managers = await managementRecipients(tx, actor, project);
+    await notifyChanged(tx, actor, updated, managers, described);
     return { ok: true };
   });
 });
@@ -738,12 +708,9 @@ app.put("/api/projects/:id/planning", async (request, reply) => {
     else if (changed.length) await notifyProject(tx, actor, plannedProject, "changed", described);
     if (project.plannedStart && plannedProject.confirmedAt) {
       if (removedAssignments.length) {
-        await tx.delete(notificationBatches).where(and(eq(notificationBatches.projectId, project.id), inArray(notificationBatches.userId, removedAssignments.map((item) => item.userId))));
-        await notifyAssignments(tx, actor, plannedProject, removedAssignments, "EMPLOYEE_REMOVED");
+        await notifyAssignments(tx, actor, plannedProject, removedAssignments, "EMPLOYEE_REMOVED", described);
       }
-      if (addedAssignments.length) await notifyAssignments(tx, actor, plannedProject, addedAssignments, "EMPLOYEE_ASSIGNED");
-      const workerChanges = described.filter((change) => change.field !== notificationFields.employees);
-      if (workerChanges.length) await queueChangedNotifications(tx, actor, plannedProject, await activeRecipients(tx, retainedAssignments.map((item) => item.userId), actor.id), workerChanges);
+      if (described.length) await notifyChanged(tx, actor, plannedProject, plan.employeeIds, described);
     }
     return { ok: true, conflicts };
   });
@@ -801,7 +768,7 @@ app.patch("/api/projects/:id", async (request, reply) => {
       const workerChanges = described.filter((_, index) => workerFields.has(changed[index].field));
       if (updated.confirmedAt && updated.plannedStart && workerChanges.length) {
         const workerIds = (await tx.select({ id: assignments.userId }).from(assignments).where(eq(assignments.projectId, updated.id))).map((item) => item.id);
-        await queueChangedNotifications(tx, actor, updated, await activeRecipients(tx, workerIds, actor.id), workerChanges);
+        await notifyChanged(tx, actor, updated, workerIds, workerChanges);
       }
     }
     return updated;
@@ -1027,19 +994,6 @@ app.post("/api/telegram/webhook", async (request, reply) => {
 });
 
 let telegramDeliveryTask: Promise<void> | undefined;
-let notificationBatchTask: Promise<void> | undefined;
-function materializeNotificationBatches() {
-  if (notificationBatchTask) return notificationBatchTask;
-  notificationBatchTask = db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gis_notification_batches'))`);
-    const due = await tx.select().from(notificationBatches).where(lte(notificationBatches.sendAt, new Date())).orderBy(notificationBatches.sendAt).limit(50).for("update");
-    for (const item of due) {
-      await createNotifications(tx, [{ userId: item.userId, type: "PROJECT_CHANGED", projectId: item.projectId, subjectUserId: item.actorId, payload: item.payload, eventKey: `PROJECT_CHANGED_BATCH:${item.id}` }]);
-    }
-    if (due.length) await tx.delete(notificationBatches).where(inArray(notificationBatches.id, due.map((item) => item.id)));
-  }).catch(() => app.log.error("Не вдалося сформувати об’єднані сповіщення")).finally(() => { notificationBatchTask = undefined; });
-  return notificationBatchTask;
-}
 function deliverTelegramNotifications() {
   if (!telegramToken || telegramDeliveryTask) return telegramDeliveryTask;
   telegramDeliveryTask = (async () => {
@@ -1108,14 +1062,14 @@ function scheduleCleanup() {
 }
 const cleanupTimer = setInterval(() => {
   void scheduleCleanup();
-  void materializeNotificationBatches().then(() => deliverTelegramNotifications());
   void pool.query("delete from login_attempts where started_at < now() - interval '1 day'").catch(() => app.log.error("Не вдалося очистити обмеження входу"));
   void pool.query("delete from sessions where created_at <= now() - interval '365 days'").catch(() => app.log.error("Не вдалося очистити прострочені сесії"));
   void pool.query("delete from telegram_link_tokens where expires_at < now() - interval '1 day' or used_at < now() - interval '1 day'").catch(() => app.log.error("Не вдалося очистити токени Telegram"));
 }, 60_000);
-app.addHook("onClose", async () => { clearInterval(cleanupTimer); await cleanupTask; await notificationBatchTask; await telegramDeliveryTask; storage?.destroy(); await pool.end(); });
+const telegramTimer = setInterval(() => { void deliverTelegramNotifications(); }, 5_000);
+app.addHook("onClose", async () => { clearInterval(cleanupTimer); clearInterval(telegramTimer); await cleanupTask; await telegramDeliveryTask; storage?.destroy(); await pool.end(); });
 void scheduleCleanup();
-void materializeNotificationBatches().then(() => deliverTelegramNotifications());
+void deliverTelegramNotifications();
 async function shutdown(signal: string) {
   app.log.info({ signal }, "Зупинка сервера");
   try {
