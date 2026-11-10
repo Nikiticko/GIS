@@ -604,6 +604,9 @@ button:disabled { cursor: not-allowed; }
 .production-project { display: flex; flex-direction: column; gap: 5px; width: 100%; text-align: left; color: var(--ink); cursor: pointer; }
 .production-project:hover { border-color: #8ea6ba; }
 .production-project span { color: #6e7f90; font-size: 12px; }
+.archived-project-row { align-items: stretch; }
+.archived-project-main { flex: 1 1 280px; padding: 0; border: 0; background: transparent; }
+.archived-project-row > button:last-child { align-self: center; }
 .production-calendar { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); gap: 8px; overflow-x: auto; }
 .production-day { min-height: 170px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-size: 12px; }
 .production-day button { text-align: left; padding: 8px; border-radius: 7px; background: #eef4f9; color: var(--navy); }

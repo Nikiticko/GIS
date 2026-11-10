@@ -12,7 +12,7 @@ import { and, eq, gt, inArray, isNull, isNotNull, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { z } from "zod";
-import { assignments, attachments, audit, notifications, projects, projectVehicles, sessions, telegramAttachmentDeliveries, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
+import { assignments, attachments, audit, notificationBatches, notifications, projects, projectVehicles, sessions, storageDeletionJobs, telegramAttachmentDeliveries, telegramDeliveries, telegramLinks, telegramLinkTokens, users, vehicles, workTypes, type NotificationPayload } from "./schema.js";
 import { telegramDeliveryIsTerminal, telegramMessage } from "./telegram.js";
 
 const logFile = resolve(process.env.LOG_FILE || "logs/gis-api.log");
@@ -604,6 +604,49 @@ app.post("/api/projects/:id/archive", async (request, reply) => {
   });
 });
 
+async function purgeArchivedProjects(tx: Transaction, projectIds?: string[]) {
+  const archived = await tx.select({ id: projects.id }).from(projects)
+    .where(and(isNotNull(projects.archivedAt), projectIds ? inArray(projects.id, projectIds) : undefined)).for("update");
+  const ids = archived.map((project) => project.id);
+  if (!ids.length) return [];
+  const files = await tx.select({ id: attachments.id, storageKey: attachments.storageKey }).from(attachments).where(inArray(attachments.projectId, ids));
+  if (files.length) await tx.insert(storageDeletionJobs).values(files.map((file) => ({ storageKey: file.storageKey }))).onConflictDoNothing();
+  await tx.delete(notifications).where(inArray(notifications.projectId, ids));
+  await tx.delete(notificationBatches).where(inArray(notificationBatches.projectId, ids));
+  await tx.delete(assignments).where(inArray(assignments.projectId, ids));
+  await tx.delete(projectVehicles).where(inArray(projectVehicles.projectId, ids));
+  if (files.length) await tx.delete(audit).where(and(eq(audit.entityType, "attachment"), inArray(audit.entityId, files.map((file) => file.id))));
+  await tx.delete(audit).where(and(eq(audit.entityType, "project"), inArray(audit.entityId, ids)));
+  await tx.delete(attachments).where(inArray(attachments.projectId, ids));
+  await tx.delete(projects).where(inArray(projects.id, ids));
+  return ids;
+}
+
+app.delete("/api/archive/:id", async (request, reply) => {
+  const actor = await requireAdmin(request, reply);
+  if (!actor) return;
+  const params = uuidParam.safeParse(request.params);
+  if (!params.success) return reply.code(400).send({ error: "Некоректний ідентифікатор." });
+  const removed = await db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    return purgeArchivedProjects(tx, [params.data.id]);
+  });
+  if (!removed.length) return reply.code(404).send({ error: "Архівний об’єкт не знайдено." });
+  void scheduleCleanup();
+  return { removed: 1 };
+});
+
+app.delete("/api/archive", async (request, reply) => {
+  const actor = await requireAdmin(request, reply);
+  if (!actor) return;
+  const removed = await db.transaction(async (tx) => {
+    if (await sessionStillValid(tx, request.cookies[sessionCookie], actor) !== "ok") throw new SessionExpired();
+    return purgeArchivedProjects(tx);
+  });
+  if (removed.length) void scheduleCleanup();
+  return { removed: removed.length };
+});
+
 app.post("/api/projects/:id/confirm", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
@@ -1174,6 +1217,18 @@ function scheduleCleanup() {
       }
       after = batch[batch.length - 1].id;
     }
+    const deletionJobs = await db.select().from(storageDeletionJobs).where(lte(storageDeletionJobs.nextAttemptAt, new Date())).orderBy(storageDeletionJobs.nextAttemptAt).limit(100);
+    for (const job of deletionJobs) {
+      try {
+        await deleteStoredAttachment(job.storageKey);
+        await db.delete(storageDeletionJobs).where(eq(storageDeletionJobs.storageKey, job.storageKey));
+      } catch (error) {
+        const attempts = job.attempts + 1;
+        const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
+        await db.update(storageDeletionJobs).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), lastError: (error instanceof Error ? error.message : "unknown").slice(0, 500) }).where(eq(storageDeletionJobs.storageKey, job.storageKey));
+        app.log.error({ storageKey: job.storageKey, attempts }, "Не вдалося остаточно видалити архівний файл; буде повторна спроба");
+      }
+    }
   })().catch(() => { app.log.error("Не вдалося виконати очищення сховища; буде повторна спроба"); }).finally(() => { cleanupTask = undefined; });
   return cleanupTask;
 }
@@ -1216,6 +1271,7 @@ try {
   await pool.query("select count from login_attempts limit 0");
   await pool.query("select telegram_user_id from telegram_links limit 0");
   await pool.query("select notification_id from telegram_attachment_deliveries limit 0");
+  await pool.query("select storage_key from storage_deletion_jobs limit 0");
   startupStage = "server";
   await app.listen({ host: process.env.HOST || "127.0.0.1", port: Number(process.env.PORT || 3000) });
   if (telegramToken && telegramWebhookUrl && telegramWebhookSecret) {

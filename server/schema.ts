@@ -42,6 +42,10 @@ export const attachments = pgTable("attachments", {
   id: id(), projectId: uuid("project_id").notNull().references(() => projects.id), uploaderId: uuid("uploader_id").notNull().references(() => users.id),
   name: text("name").notNull(), storageKey: text("storage_key").notNull().unique(), contentType: text("content_type").notNull(), size: integer("size").notNull(), createdAt: createdAt(), deletedAt: timestamp("deleted_at", { withTimezone: true }), storageDeletedAt: timestamp("storage_deleted_at", { withTimezone: true }),
 }, (t) => [index("attachments_project_idx").on(t.projectId), index("attachments_cleanup_idx").on(t.id).where(sql`${t.deletedAt} is not null and ${t.storageDeletedAt} is null`)]);
+export const storageDeletionJobs = pgTable("storage_deletion_jobs", {
+  storageKey: text("storage_key").primaryKey(), attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(), lastError: text("last_error"), createdAt: createdAt(),
+}, (t) => [index("storage_deletion_jobs_pending_idx").on(t.nextAttemptAt)]);
 export const notifications = pgTable("notifications", {
   id: id(), userId: uuid("user_id").notNull().references(() => users.id), type: text("type").notNull(), projectId: uuid("project_id").references(() => projects.id), subjectUserId: uuid("subject_user_id").references(() => users.id), payload: jsonb("payload").$type<NotificationPayload>(), createdAt: createdAt(), readAt: timestamp("read_at", { withTimezone: true }),
   eventKey: text("event_key").unique(),
