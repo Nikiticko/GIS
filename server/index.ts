@@ -809,6 +809,13 @@ app.get("/api/notifications", async (request, reply) => {
     .where(eq(notifications.userId, actor.id)).orderBy(sql`${notifications.createdAt} desc`)
     .then((rows) => rows.map(({ notification, projectName, canOpen }) => ({ ...notification, projectName, canOpen })));
 });
+app.post("/api/notifications/read-all", async (request, reply) => {
+  const actor = await currentUser(request.cookies[sessionCookie]);
+  if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
+  const readAt = new Date();
+  const updated = await db.update(notifications).set({ readAt }).where(and(eq(notifications.userId, actor.id), isNull(notifications.readAt))).returning({ id: notifications.id });
+  return { updated: updated.length, readAt };
+});
 app.post("/api/notifications/:id/read", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });

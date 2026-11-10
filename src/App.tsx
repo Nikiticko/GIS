@@ -58,11 +58,15 @@ export default function App() {
     setConnectionError("");
   }, []);
   const reset = useCallback(() => { sessionIdentity.current = null; setUser(null); setData(initialData); setDetail(null); setModal(null); setConnectionError(""); }, []);
-  const loadNotifications = useCallback(async () => {
+  const loadNotifications = useCallback(async (readAll = false) => {
     const current = sessionIdentity.current;
     if (!current) return;
     try {
-      const notifications = await api.notifications();
+      let notifications = await api.notifications();
+      if (readAll && notifications.some((item) => !item.readAt)) {
+        const { readAt } = await api.markAllNotificationsRead();
+        notifications = notifications.map((item) => item.readAt ? item : { ...item, readAt });
+      }
       if (sessionIdentity.current?.id === current.id && sessionIdentity.current.role === current.role) setData((previous) => ({ ...previous, notifications }));
     } catch (error) {
       if (sessionIdentity.current?.id !== current.id || sessionIdentity.current.role !== current.role) return;
@@ -118,9 +122,12 @@ export default function App() {
   }, [Boolean(user), loadSession]);
   useEffect(() => {
     if (!user) return;
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void loadNotifications(); }, 5_000);
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void loadNotifications(screen === "notifications"); }, 5_000);
     return () => window.clearInterval(timer);
-  }, [user?.id, user?.role, loadNotifications]);
+  }, [user?.id, user?.role, loadNotifications, screen]);
+  useEffect(() => {
+    if (user && screen === "notifications") void loadNotifications(true);
+  }, [user?.id, user?.role, loadNotifications, screen]);
   useEffect(() => {
     if (!statusMessage) return;
     const timer = window.setTimeout(() => setStatusMessage(""), 4_000);
@@ -190,12 +197,12 @@ export default function App() {
     event.preventDefault();
     if (window.location.pathname !== paths[target]) window.history.pushState(null, "", paths[target]);
     setScreen(target); setModal(null); setDetail(null);
-    if (target === "notifications") void loadNotifications();
   }
   if (checking) return <div className="empty-state">Завантаження…</div>;
   if (!user) return connectionError ? <div className="login-page"><div className="login-card"><p role="alert">{connectionError}</p><Button onClick={() => void loadSession()}>Спробувати ще раз</Button></div></div> : <LoginView onLogin={(current) => { sessionIdentity.current = current; setUser(current); void refresh(current).catch((error) => setConnectionError(errorMessage(error))); }} />;
   const admin = user.role === "ADMIN", head = user.role === "PRODUCTION_HEAD", manager = user.role === "MANAGER", employee = user.role === "PRODUCTION_EMPLOYEE";
   const canPlan = admin || head, canCreate = admin || manager;
+  const unreadNotifications = data.notifications.filter((item) => !item.readAt).length;
   const nav: { key: Screen; title: string; icon: typeof Users }[] = [
     { key: "projects", title: employee ? "Мої об’єкти" : manager ? "Мої об’єкти" : "Об’єкти", icon: ClipboardList },
     { key: "schedule", title: "Графік", icon: CalendarDays },
@@ -203,7 +210,7 @@ export default function App() {
     ...(admin || head || manager ? [{ key: "employees" as const, title: "Працівники", icon: Users }] : []),
     ...(admin || head || manager ? [{ key: "vehicles_schedule" as const, title: "Автомобілі", icon: Car }] : []),
     ...(admin ? [{ key: "users" as const, title: "Користувачі", icon: Users }, { key: "directories" as const, title: "Довідники", icon: Settings }, { key: "audit" as const, title: "Аудит", icon: Shield }] : []),
-    { key: "notifications", title: `Сповіщення${data.notifications.some((item) => !item.readAt) ? " •" : ""}`, icon: Bell },
+    { key: "notifications", title: `Сповіщення${unreadNotifications ? ` (${unreadNotifications})` : ""}`, icon: Bell },
   ];
   const effectiveScreen = nav.some((item) => item.key === screen) ? screen : null;
   const currentRows = effectiveScreen === "archive" ? data.archive : data.projects;
@@ -222,7 +229,7 @@ export default function App() {
         {effectiveScreen === "users" && admin && <ProductionUsers users={data.users} refresh={reload} />}
         {effectiveScreen === "directories" && admin && <ProductionDirectories workTypes={data.workTypes} vehicles={data.vehicles} refresh={reload} />}
         {effectiveScreen === "audit" && admin && <ProductionAudit entries={data.audit} users={data.users} projects={[...data.projects, ...data.archive]} workTypes={data.workTypes} vehicles={data.vehicles} />}
-        {effectiveScreen === "notifications" && <section className="page-stack"><div className="page-heading"><h1>Сповіщення</h1>{Boolean(data.notifications.length) && <Button variant="destructive" disabled={busy} onClick={() => { if (window.confirm("Очистити всі сповіщення? Відновити їх буде неможливо.")) void perform(async () => { await api.clearNotifications(); setData((previous) => ({ ...previous, notifications: [] })); }); }}>Очистити сповіщення</Button>}</div><div className="production-list">{data.notifications.map((notice) => <article className="production-panel production-row" key={notice.id}><div><strong>{notificationLabels[notice.type] ?? "Системне сповіщення"}{notice.payload?.projectName || notice.projectName ? `: ${notice.payload?.projectName || notice.projectName}` : ""}</strong><p>{formatDateTime(notice.createdAt)} · {notice.readAt ? "Прочитано" : "Нове"}</p>{notice.payload && <>{notice.payload.manager !== undefined && <><p>Менеджер: {notice.payload.manager}</p><p>Дати: {period(notice.payload.start ?? null, notice.payload.end ?? null)}</p><p>Тип робіт: {notice.payload.workType}</p><p>Обсяг робіт: {notice.payload.volume || "Не вказано"}</p>{notice.payload.team && <p>Бригада: {notice.payload.team.join(", ") || "Не призначена"}</p>}{notice.payload.vehicles && <p>Автомобілі: {notice.payload.vehicles.join(", ") || "Не призначені"}</p>}</>}{notice.payload.changes?.map((change, index) => <p key={`${change.field}-${index}`}>{change.field}: {formatChangeValue(change.field, change.before)} → {formatChangeValue(change.field, change.after)}</p>)}</>}</div><div className="production-actions">{notice.projectId && notice.canOpen && <Button variant="outline" onClick={() => void openProject(notice.projectId!)}>Відкрити об’єкт</Button>}{!notice.readAt && <Button variant="outline" onClick={() => void perform(async () => { await api.markRead(notice.id); await reload(); })}>Позначити прочитаним</Button>}</div></article>)}{!data.notifications.length && <p>Сповіщень поки немає.</p>}</div></section>}
+        {effectiveScreen === "notifications" && <section className="page-stack"><div className="page-heading"><h1>Сповіщення</h1>{Boolean(data.notifications.length) && <Button variant="destructive" disabled={busy} onClick={() => { if (window.confirm("Очистити всі сповіщення? Відновити їх буде неможливо.")) void perform(async () => { await api.clearNotifications(); setData((previous) => ({ ...previous, notifications: [] })); }); }}>Очистити сповіщення</Button>}</div><div className="production-list">{data.notifications.map((notice) => { const canOpenNotice = Boolean(notice.projectId && notice.canOpen); const openNotice = () => { if (canOpenNotice) void openProject(notice.projectId!); }; return <article className={`production-panel production-row notification-panel ${canOpenNotice ? "is-clickable" : ""}`} key={notice.id} role={canOpenNotice ? "button" : undefined} tabIndex={canOpenNotice ? 0 : undefined} onClick={openNotice} onKeyDown={(event) => { if (canOpenNotice && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openNotice(); } }}><div><strong>{notificationLabels[notice.type] ?? "Системне сповіщення"}{notice.payload?.projectName || notice.projectName ? `: ${notice.payload?.projectName || notice.projectName}` : ""}</strong><p>{formatDateTime(notice.createdAt)} · {notice.readAt ? "Прочитано" : "Нове"}</p>{notice.payload && <>{notice.payload.manager !== undefined && <><p>Менеджер: {notice.payload.manager}</p><p>Дати: {period(notice.payload.start ?? null, notice.payload.end ?? null)}</p><p>Тип робіт: {notice.payload.workType}</p><p>Обсяг робіт: {notice.payload.volume || "Не вказано"}</p>{notice.payload.team && <p>Бригада: {notice.payload.team.join(", ") || "Не призначена"}</p>}{notice.payload.vehicles && <p>Автомобілі: {notice.payload.vehicles.join(", ") || "Не призначені"}</p>}</>}{notice.payload.changes?.map((change, index) => <p key={`${change.field}-${index}`}>{change.field}: {formatChangeValue(change.field, change.before)} → {formatChangeValue(change.field, change.after)}</p>)}</>}</div></article>; })}{!data.notifications.length && <p>Сповіщень поки немає.</p>}</div></section>}
       </div></main>
     </div>
     <Dialog open={modal !== null} onOpenChange={(open) => { if (!open && !uploading) setModal(null); }}><DialogContent className="modal-content production-modal">

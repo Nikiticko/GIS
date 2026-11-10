@@ -597,6 +597,9 @@ button:disabled { cursor: not-allowed; }
 .production-panel label:has(input[type="checkbox"]) { flex-direction: row; align-items: center; }
 .production-row, .production-actions { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
 .production-row { justify-content: space-between; }
+.notification-panel.is-clickable { cursor: pointer; transition: border-color 140ms ease, box-shadow 140ms ease; }
+.notification-panel.is-clickable:hover { border-color: #8ea6ba; box-shadow: 0 4px 14px rgb(31 61 86 / 8%); }
+.notification-panel.is-clickable:focus-visible { outline: 2px solid #2e618a; outline-offset: 2px; }
 .production-row > input { flex: 1 1 130px; width: auto; }
 .production-project { display: flex; flex-direction: column; gap: 5px; width: 100%; text-align: left; color: var(--ink); cursor: pointer; }
 .production-project:hover { border-color: #8ea6ba; }
