@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { api, ApiError, type AuditEntry, type ProjectRow, type Role, type User, type Vehicle, type WorkType } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,33 @@ export function ProductionUsers({ users, refresh }: { users: User[]; refresh: ()
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [query, setQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState<"ALL" | Role>("ALL");
+  const [activityFilter, setActivityFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [telegramFilter, setTelegramFilter] = useState<"ALL" | "LINKED" | "UNLINKED" | "ERROR">("ALL");
+  const [foremenOnly, setForemenOnly] = useState(false);
+  const filteredUsers = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("uk");
+    return users.filter((user) => {
+      if (normalizedQuery && !user.name.toLocaleLowerCase("uk").includes(normalizedQuery)) return false;
+      if (roleFilter !== "ALL" && user.role !== roleFilter) return false;
+      if (activityFilter === "ACTIVE" && !user.active) return false;
+      if (activityFilter === "INACTIVE" && user.active) return false;
+      if (telegramFilter === "LINKED" && (!user.telegramLinked || user.telegramDeliveryError)) return false;
+      if (telegramFilter === "UNLINKED" && user.telegramLinked) return false;
+      if (telegramFilter === "ERROR" && !user.telegramDeliveryError) return false;
+      if (foremenOnly && !user.foreman) return false;
+      return true;
+    });
+  }, [activityFilter, foremenOnly, query, roleFilter, telegramFilter, users]);
+  const filtersActive = Boolean(query.trim() || roleFilter !== "ALL" || activityFilter !== "ALL" || telegramFilter !== "ALL" || foremenOnly);
+  function resetFilters() {
+    setQuery("");
+    setRoleFilter("ALL");
+    setActivityFilter("ALL");
+    setTelegramFilter("ALL");
+    setForemenOnly(false);
+  }
   async function act(work: () => Promise<unknown>) {
     setPending(true); setError("");
     try {
@@ -30,7 +57,17 @@ export function ProductionUsers({ users, refresh }: { users: User[]; refresh: ()
   return <section className="page-stack"><div className="page-heading"><div><p className="eyebrow">АДМІНІСТРУВАННЯ</p><h1>Користувачі</h1></div></div>
     {error && <p className="form-error" role="alert">{error}</p>}
     <form className="production-panel form-stack" onSubmit={create}><h2>Додати користувача</h2><label>ПІБ<Input value={name} onChange={(event) => setName(event.target.value)} required /></label><label>Роль<select className="form-select" value={role} onChange={(event) => setRole(event.target.value as typeof role)}>{Object.entries(roles).filter(([key]) => key !== "ADMIN").map(([key, title]) => <option value={key} key={key}>{title}</option>)}</select></label><label>Телефон<Input value={phone} onChange={(event) => setPhone(event.target.value)} type="tel" /></label><Button type="submit" disabled={pending}>Створити</Button></form>
-    <div className="production-list">{users.map((user) => <UserCard key={user.id} user={user} pending={pending} act={act} />)}</div>
+    <div className="production-panel form-stack"><h2>Пошук і фільтри</h2>
+      <label>Пошук за ПІБ<Input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Введіть ім’я або прізвище" /></label>
+      <div className="production-actions">
+        <label>Роль<select className="form-select" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as typeof roleFilter)}><option value="ALL">Усі ролі</option>{Object.entries(roles).map(([key, title]) => <option value={key} key={key}>{title}</option>)}</select></label>
+        <label>Активність<select className="form-select" value={activityFilter} onChange={(event) => setActivityFilter(event.target.value as typeof activityFilter)}><option value="ALL">Усі</option><option value="ACTIVE">Активні</option><option value="INACTIVE">Неактивні</option></select></label>
+        <label>Telegram<select className="form-select" value={telegramFilter} onChange={(event) => setTelegramFilter(event.target.value as typeof telegramFilter)}><option value="ALL">Будь-який стан</option><option value="LINKED">Підключено</option><option value="UNLINKED">Не підключено</option><option value="ERROR">Помилка доставки</option></select></label>
+      </div>
+      <label><input type="checkbox" checked={foremenOnly} onChange={(event) => setForemenOnly(event.target.checked)} /> Тільки бригадири</label>
+      <div className="production-actions"><span>Знайдено: {filteredUsers.length} із {users.length}</span>{filtersActive && <Button type="button" variant="outline" onClick={resetFilters}>Скинути фільтри</Button>}</div>
+    </div>
+    <div className="production-list">{filteredUsers.map((user) => <UserCard key={user.id} user={user} pending={pending} act={act} />)}{!filteredUsers.length && <div className="empty-state">Користувачів за вибраними умовами не знайдено.</div>}</div>
   </section>;
 }
 type UserDraft = { base: User; name: string; phone: string; role: Role; foreman: boolean };
