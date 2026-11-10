@@ -45,10 +45,10 @@ export default function App() {
   const initialLoadStarted = useRef(false);
 
   const refresh = useCallback(async (current: CurrentUser) => {
-    const admin = current.role === "ADMIN", head = current.role === "PRODUCTION_HEAD", employee = current.role === "PRODUCTION_EMPLOYEE";
+    const admin = current.role === "ADMIN", head = current.role === "PRODUCTION_HEAD", manager = current.role === "MANAGER", employee = current.role === "PRODUCTION_EMPLOYEE";
     const [projects, schedule, archive, employees, users, workTypes, vehicles, notifications, audit] = await Promise.all([
       api.projects(), api.schedule(), employee ? Promise.resolve([]) : api.projects("archive"),
-      admin || head ? api.employees() : Promise.resolve([]), admin ? api.users() : Promise.resolve([]),
+      admin || head || manager ? api.employees() : Promise.resolve([]), admin ? api.users() : Promise.resolve([]),
       employee ? Promise.resolve([]) : api.workTypes(), admin || head ? api.vehicles() : Promise.resolve([]),
       api.notifications(), admin ? api.audit() : Promise.resolve([]),
     ]);
@@ -199,7 +199,7 @@ export default function App() {
     { key: "projects", title: employee ? "Мої об’єкти" : manager ? "Мої об’єкти" : "Об’єкти", icon: ClipboardList },
     { key: "schedule", title: "Графік", icon: CalendarDays },
     ...(!employee ? [{ key: "archive" as const, title: "Архів", icon: Archive }] : []),
-    ...(head ? [{ key: "employees" as const, title: "Працівники", icon: Users }] : []),
+    ...(admin || head || manager ? [{ key: "employees" as const, title: "Працівники", icon: Users }] : []),
     ...(admin ? [{ key: "users" as const, title: "Користувачі", icon: Users }, { key: "directories" as const, title: "Довідники", icon: Settings }, { key: "audit" as const, title: "Аудит", icon: Shield }] : []),
     { key: "notifications", title: `Сповіщення${data.notifications.some((item) => !item.readAt) ? " •" : ""}`, icon: Bell },
   ];

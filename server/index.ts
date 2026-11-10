@@ -796,7 +796,7 @@ app.patch("/api/projects/:id", async (request, reply) => {
 app.get("/api/employees", async (request, reply) => {
   const actor = await currentUser(request.cookies[sessionCookie]);
   if (!actor) return reply.code(401).send({ error: "Потрібно увійти." });
-  if (actor.role !== "ADMIN" && actor.role !== "PRODUCTION_HEAD") return reply.code(403).send({ error: "Недостатньо прав." });
+  if (!["ADMIN", "MANAGER", "PRODUCTION_HEAD"].includes(actor.role)) return reply.code(403).send({ error: "Недостатньо прав." });
   return db.select({ id: users.id, name: users.name, phone: users.phone, active: users.active, foreman: users.foreman }).from(users).where(eq(users.role, "PRODUCTION_EMPLOYEE"));
 });
 app.get("/api/notifications", async (request, reply) => {
