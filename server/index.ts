@@ -62,6 +62,7 @@ app.addHook("onResponse", async (request, reply) => {
   if (reply.statusCode >= 500) request.log.error(details, "Запит завершено з помилкою сервера");
   else if (reply.statusCode >= 400) request.log.warn(details, "Запит відхилено");
   else request.log.info(details, "Запит виконано");
+  void deliverTelegramNotifications();
 });
 await app.register(cookie);
 const attachmentLimit = 500 * 1024 * 1024;
