@@ -243,7 +243,7 @@ async function createNotifications(tx: Transaction, values: NotificationValue[],
   if (deliveries.length) await tx.insert(telegramDeliveries).values(deliveries);
   const attachmentDeliveries = created
     .filter((item) => linkedIds.has(item.userId) && (!attachmentRecipientIds || attachmentRecipientIds.has(item.userId)))
-    .flatMap((item) => attachmentIds.map((attachmentId) => ({ notificationId: item.id, attachmentId })));
+    .flatMap((item) => attachmentIds.map((attachmentId) => ({ notificationId: item.id, attachmentId, nextAttemptAt: new Date(Date.now() + 3_000) })));
   if (attachmentDeliveries.length) await tx.insert(telegramAttachmentDeliveries).values(attachmentDeliveries).onConflictDoNothing();
 }
 async function deletePendingTelegramDeliveries(tx: Transaction, userId: string) {
@@ -982,19 +982,34 @@ async function telegramRequest(method: string, body: object): Promise<void> {
   const result = await response.json() as TelegramResponse;
   if (!response.ok || !result.ok) throw new TelegramApiError(result.description || `Telegram HTTP ${response.status}`, result.error_code ?? response.status);
 }
-async function telegramFileRequest(chatId: number, item: typeof attachments.$inferSelect, projectName: string) {
-  if (!telegramToken) throw new Error("Telegram bot is not configured");
-  const bytes = item.storageKey.startsWith("local/")
-    ? await readFile(localAttachmentPath(item.storageKey))
+async function telegramAttachmentBytes(item: typeof attachments.$inferSelect) {
+  return item.storageKey.startsWith("local/")
+    ? readFile(localAttachmentPath(item.storageKey))
     : storage && bucket
-      ? await storage.send(new GetObjectCommand({ Bucket: bucket, Key: item.storageKey })).then(async (object) => object.Body?.transformToByteArray())
+      ? storage.send(new GetObjectCommand({ Bucket: bucket, Key: item.storageKey })).then(async (object) => object.Body?.transformToByteArray())
       : undefined;
-  if (!bytes) throw new Error("Сховище вкладень недоступне");
+}
+async function telegramFileRequest(chatId: number, items: (typeof attachments.$inferSelect)[], projectName: string) {
+  if (!telegramToken) throw new Error("Telegram bot is not configured");
   const form = new FormData();
   form.set("chat_id", String(chatId));
-  form.set("caption", Array.from(`Вкладення до об’єкта: ${projectName}`).slice(0, 1024).join(""));
-  form.set("document", new Blob([Uint8Array.from(bytes).buffer], { type: item.contentType || "application/octet-stream" }), item.name);
-  const response = await fetch(`https://api.telegram.org/bot${telegramToken}/sendDocument`, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
+  const caption = Array.from(`Вкладення до об’єкта: ${projectName}`).slice(0, 1024).join("");
+  const media = [];
+  for (const [index, item] of items.entries()) {
+    const bytes = await telegramAttachmentBytes(item);
+    if (!bytes) throw new Error("Сховище вкладень недоступне");
+    const field = `file${index}`;
+    form.set(field, new Blob([Uint8Array.from(bytes).buffer], { type: item.contentType || "application/octet-stream" }), item.name);
+    media.push({ type: "document", media: `attach://${field}`, ...(index === 0 ? { caption } : {}) });
+  }
+  const method = items.length === 1 ? "sendDocument" : "sendMediaGroup";
+  if (items.length === 1) {
+    form.set("document", `attach://file0`);
+    form.set("caption", caption);
+  } else {
+    form.set("media", JSON.stringify(media));
+  }
+  const response = await fetch(`https://api.telegram.org/bot${telegramToken}/${method}`, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
   const result = await response.json() as TelegramResponse;
   if (!response.ok || !result.ok) throw new TelegramApiError(result.description || `Telegram HTTP ${response.status}`, result.error_code ?? response.status);
 }
@@ -1072,22 +1087,43 @@ function deliverTelegramNotifications() {
         .innerJoin(notifications, eq(notifications.id, telegramAttachmentDeliveries.notificationId)).innerJoin(attachments, eq(attachments.id, telegramAttachmentDeliveries.attachmentId))
         .innerJoin(telegramLinks, eq(telegramLinks.userId, notifications.userId)).innerJoin(users, eq(users.id, notifications.userId))
         .where(and(isNull(telegramAttachmentDeliveries.sentAt), isNull(telegramAttachmentDeliveries.failedAt), isNull(attachments.deletedAt), lte(telegramAttachmentDeliveries.nextAttemptAt, new Date())))
-        .orderBy(telegramAttachmentDeliveries.nextAttemptAt).limit(10);
+        .orderBy(telegramAttachmentDeliveries.nextAttemptAt, notifications.userId, notifications.projectId, attachments.createdAt).limit(50);
+      const groupedAttachments = new Map<string, typeof attachmentBatch>();
       for (const item of attachmentBatch) {
-        if (!item.userActive) {
-          await db.delete(telegramAttachmentDeliveries).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
+        const key = `${item.notification.userId}:${item.notification.projectId ?? "system"}`;
+        groupedAttachments.set(key, [...(groupedAttachments.get(key) ?? []), item]);
+      }
+      for (const rows of groupedAttachments.values()) {
+        if (!rows[0].userActive) {
+          for (const item of rows) await db.delete(telegramAttachmentDeliveries).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
           continue;
         }
+        const groups: (typeof rows)[] = [];
+        let current: typeof rows = [], currentSize = 0;
+        for (const item of rows) {
+          if (current.length && (current.length === 10 || currentSize + item.attachment.size > 50 * 1024 * 1024)) {
+            groups.push(current);
+            current = [];
+            currentSize = 0;
+          }
+          current.push(item);
+          currentSize += item.attachment.size;
+        }
+        if (current.length) groups.push(current);
+        for (const group of groups) {
         try {
-          await telegramFileRequest(item.chatId, item.attachment, item.notification.payload?.projectName || "Об’єкт");
-          await db.update(telegramAttachmentDeliveries).set({ sentAt: new Date(), lastError: null }).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
+          await telegramFileRequest(group[0].chatId, group.map((item) => item.attachment), group[0].notification.payload?.projectName || "Об’єкт");
+          for (const item of group) await db.update(telegramAttachmentDeliveries).set({ sentAt: new Date(), lastError: null }).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
         } catch (error) {
-          const attempts = item.delivery.attempts + 1;
           const errorMessage = (error instanceof Error ? error.message : "unknown").slice(0, 500);
-          const permanent = telegramDeliveryIsTerminal(attempts, error instanceof TelegramApiError ? error.status : undefined, errorMessage);
-          const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
-          await db.update(telegramAttachmentDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
-          app.log.error({ notificationId: item.delivery.notificationId, attachmentId: item.delivery.attachmentId, attempts, permanent }, "Не вдалося доставити вкладення Telegram");
+          for (const item of group) {
+            const attempts = item.delivery.attempts + 1;
+            const permanent = telegramDeliveryIsTerminal(attempts, error instanceof TelegramApiError ? error.status : undefined, errorMessage);
+            const delay = Math.min(24 * 60 * 60_000, 30_000 * 2 ** Math.min(attempts - 1, 11));
+            await db.update(telegramAttachmentDeliveries).set({ attempts, nextAttemptAt: new Date(Date.now() + delay), failedAt: permanent ? new Date() : null, lastError: errorMessage }).where(and(eq(telegramAttachmentDeliveries.notificationId, item.delivery.notificationId), eq(telegramAttachmentDeliveries.attachmentId, item.delivery.attachmentId)));
+            app.log.error({ notificationId: item.delivery.notificationId, attachmentId: item.delivery.attachmentId, attempts, permanent }, "Не вдалося доставити вкладення Telegram");
+          }
+        }
         }
       }
     } finally {
