@@ -59,6 +59,7 @@ button:disabled { cursor: not-allowed; }
 .topbar { height: 70px; position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 30px; padding: 0 30px; background: #fff; border-bottom: 1px solid var(--line); }
 .brand-lockup { display: flex; align-items: center; gap: 11px; width: 218px; flex: 0 0 218px; }
 .brand-mark { width: 37px; height: 37px; display: grid; place-items: center; color: #fff; background: var(--navy); border-radius: 11px; }
+.brand-mark img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .brand-lockup strong { display: block; font-size: 14px; letter-spacing: -.02em; line-height: 1.15; }
 .brand-lockup span { display: block; margin-top: 3px; color: #8797a8; font-size: 9px; letter-spacing: .13em; font-weight: 700; }
 .desktop-nav { display: flex; align-self: stretch; align-items: center; gap: 6px; }
@@ -627,6 +628,199 @@ button:disabled { cursor: not-allowed; }
   .account-name { max-width: 110px; }
   .production-detail-grid { grid-template-columns: 1fr; }
 }
+
+/* GIS Calendar 2026 visual system */
+:root {
+  --background: #f7fbff;
+  --foreground: #0b2c4d;
+  --primary: #ff7a00;
+  --primary-foreground: #ffffff;
+  --secondary: #edf6ff;
+  --secondary-foreground: #0b2c4d;
+  --muted: #edf6ff;
+  --muted-foreground: #66809a;
+  --accent: #e3f1ff;
+  --accent-foreground: #0b2c4d;
+  --border: #d7e5f2;
+  --input: #cbdced;
+  --ring: #ff8a1f;
+  --radius: .7rem;
+  --ink: #0b2c4d;
+  --muted-ink: #66809a;
+  --navy: #062f57;
+  --blue: #1764a5;
+  --blue-soft: #edf6ff;
+  --amber: #ff7a00;
+  --amber-soft: #fff0df;
+  --line: #d7e5f2;
+  --panel: #ffffff;
+  --canvas: #f7fbff;
+}
+
+body {
+  background:
+    linear-gradient(135deg, rgb(220 238 255 / 38%) 0, transparent 34%),
+    #f7fbff;
+  color: var(--ink);
+}
+
+.app-shell { background: #f7fbff; }
+.topbar {
+  height: 68px;
+  padding: 0 22px 0 14px;
+  color: #0b2c4d;
+  background:
+    linear-gradient(90deg, #062f57 0 210px, transparent 210px),
+    linear-gradient(120deg, #f9fcff 48%, #e8f4ff 100%);
+  border-bottom-color: #cbddec;
+  box-shadow: 0 3px 16px rgb(5 47 87 / 7%);
+}
+.brand-lockup { width: 174px; flex-basis: 174px; gap: 9px; color: #fff; }
+.brand-mark { color: #ff870d; background: transparent; border: 0; border-radius: 8px; }
+.brand-lockup strong { color: #fff; font-size: 15px; }
+.brand-lockup span { color: #cbdff0; font-size: 8px; }
+.production-account { gap: 10px; }
+.account-name { color: #0b2c4d; font-weight: 700; }
+.telegram-connect-button { color: #fff !important; background: #ff7a00 !important; border-color: #ff7a00 !important; }
+.telegram-connect-button:hover { background: #e86e00 !important; }
+.topbar .production-account > button:last-child { color: #0b2c4d; background: rgb(255 255 255 / 88%); border-color: #cbdced; }
+
+.production-layout { min-height: calc(100vh - 68px); }
+.production-nav {
+  position: relative;
+  width: 210px;
+  flex: 0 0 210px;
+  gap: 4px;
+  padding: 18px 10px 120px;
+  overflow: hidden;
+  background: linear-gradient(165deg, #073861 0%, #052d52 72%, #062744 100%);
+  border-right: 0;
+}
+.production-nav::after {
+  content: "";
+  position: absolute;
+  right: -48px;
+  bottom: -58px;
+  width: 290px;
+  height: 130px;
+  border-radius: 50%;
+  background: linear-gradient(155deg, transparent 33%, #ffb000 34% 45%, #ff7300 46% 66%, #ffc42e 67% 75%, transparent 76%);
+  transform: rotate(-8deg);
+  pointer-events: none;
+}
+.production-nav .nav-link {
+  position: relative;
+  z-index: 1;
+  height: 38px;
+  padding: 0 11px;
+  color: #f4f8fc;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 540;
+}
+.production-nav .nav-link:hover { color: #fff; background: rgb(255 255 255 / 10%); }
+.production-nav .nav-link.active { color: #fff; background: linear-gradient(90deg, #ff7000, #ff8c18); box-shadow: 0 4px 12px rgb(255 110 0 / 24%); }
+.production-nav .nav-link svg { color: currentColor; stroke-width: 1.8; }
+
+.main-content {
+  position: relative;
+  padding: 26px 30px 52px;
+  background:
+    linear-gradient(160deg, rgb(199 224 247 / 55%) 0, transparent 23%),
+    linear-gradient(25deg, transparent 0 77%, rgb(220 237 251 / 38%) 77% 82%, transparent 82%),
+    #f8fbfe;
+}
+.main-content::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 170px;
+  opacity: .28;
+  pointer-events: none;
+  background:
+    linear-gradient(115deg, transparent 55%, #7ba8cb 55.3% 55.7%, transparent 56%),
+    linear-gradient(65deg, transparent 67%, #7ba8cb 67.3% 67.7%, transparent 68%),
+    repeating-linear-gradient(90deg, transparent 0 52px, rgb(68 124 168 / 22%) 53px 54px);
+  mask-image: linear-gradient(90deg, transparent 0, #000 35%, #000 85%, transparent 100%);
+}
+.content-inner { position: relative; z-index: 1; width: min(100%, 1440px); }
+.page-stack { gap: 16px; }
+.page-heading { min-height: 70px; }
+.page-heading h1 { color: #082f57; font-size: clamp(25px, 2.2vw, 32px); font-weight: 760; }
+.page-heading h1::after {
+  content: "";
+  display: block;
+  width: 64px;
+  height: 3px;
+  margin-top: 7px;
+  border-radius: 99px;
+  background: #ff7a00;
+}
+.eyebrow { margin-bottom: 2px; color: #315f86; font-size: 8px; }
+
+.production-panel,
+.card-surface,
+.production-month-scroll,
+.employee-schedule-scroll,
+.schedule-filter-group,
+.status-summary-tile,
+.project-card,
+.employee-card,
+.employee-project-card,
+.agenda-card {
+  border-color: #d7e5f2;
+  background: rgb(255 255 255 / 91%);
+  box-shadow: 0 4px 14px rgb(23 72 111 / 7%);
+}
+.production-panel { border-radius: 10px; padding: 14px 16px; }
+.production-project:hover,
+.notification-panel.is-clickable:hover { border-color: #ff9a3f; box-shadow: 0 5px 16px rgb(255 122 0 / 10%); }
+.schedule-filter-panel { gap: 9px; padding: 12px; border: 1px solid #d7e5f2; border-radius: 11px; background: rgb(255 255 255 / 86%); }
+.schedule-filter-group summary,
+.project-filter-panel input,
+.project-filter-panel select { min-height: 36px; }
+.production-month-scroll, .employee-schedule-scroll { border-radius: 10px; }
+.production-month-weekdays,
+.employee-schedule-header { background: #edf6ff; }
+.production-month-cell.today,
+.employee-schedule-day.is-today,
+.employee-schedule-date.is-today { background: #e3f1ff; }
+.production-month-day.today { background: #ff7a00; }
+.employee-schedule-controls button[aria-pressed="true"] { background: #ff7a00; color: #fff; }
+.production-month-event.status-new,
+.production-month-legend .status-new { color: #8a4900; background: #fff0cf; }
+.production-month-event.status-planned,
+.production-month-legend .status-planned,
+.employee-schedule-event { color: #0d548d; background: #dceeff; }
+
+.login-page {
+  background:
+    linear-gradient(145deg, rgb(6 47 87 / 96%) 0 33%, transparent 33%),
+    linear-gradient(25deg, #fff0d8 0, transparent 33%),
+    #edf6ff;
+}
+.login-card { border-color: #cbddec; background: rgb(255 255 255 / 94%); box-shadow: 0 24px 70px rgb(6 47 87 / 22%); }
+
+@media (max-width: 760px) {
+  .topbar { height: 62px; padding: 0 12px; background: #062f57; }
+  .brand-lockup { width: auto; flex: 1 1 auto; }
+  .production-account { margin-left: 0; }
+  .account-name { color: #fff; }
+  .production-layout { min-height: calc(100vh - 62px); }
+  .production-nav {
+    width: 100%;
+    padding: 8px;
+    background: #062f57;
+    border-bottom: 0;
+  }
+  .production-nav::after { display: none; }
+  .production-nav .nav-link { width: auto; height: 36px; }
+  .main-content { padding: 18px 14px 36px; }
+  .page-heading { min-height: 58px; align-items: flex-start; }
+  .page-heading h1 { font-size: 24px; }
+  .login-page { padding: 16px; overflow: hidden; }
+  .login-card { width: calc(100vw - 32px); max-width: 400px; padding: 28px 24px; }
+}
 @media (max-width: 520px) {
   .account-name, .telegram-connect-label { display: none; }
   .telegram-connect-button { width: 32px; padding: 0; }
@@ -719,4 +913,31 @@ button:disabled { cursor: not-allowed; }
   .production-month { min-width: 0; }
   .production-month-day { margin-left: 3px; }
   .production-month-event { padding: 3px 4px; font-size: 10px; }
+}
+
+/* Keep the 2026 theme authoritative over legacy component rules. */
+.schedule-filter-panel { gap: 9px; padding: 12px; border: 1px solid #d7e5f2; border-radius: 11px; background: rgb(255 255 255 / 86%); }
+.production-month-weekdays, .employee-schedule-header { background: #edf6ff; }
+.production-month-cell.today, .employee-schedule-day.is-today, .employee-schedule-date.is-today { background: #e3f1ff; }
+.production-month-day.today { background: #ff7a00; }
+.employee-schedule-controls button[aria-pressed="true"] { background: #ff7a00; color: #fff; }
+.production-month-scroll, .employee-schedule-scroll { border-color: #d7e5f2; border-radius: 10px; box-shadow: 0 4px 14px rgb(23 72 111 / 7%); }
+.primary-shadcn { background: #ff7a00; color: #fff; box-shadow: 0 3px 10px rgb(255 122 0 / 20%); }
+.primary-shadcn:hover { background: #e86e00; }
+.login-card .brand-lockup { width: auto; flex-basis: auto; }
+.login-card .brand-lockup strong { color: #082f57; }
+.login-card .brand-lockup span { color: #7290aa; }
+
+@media (max-width: 760px) {
+  .topbar { height: 62px; padding: 0 12px; background: #062f57; }
+  .brand-lockup { width: auto; flex: 1 1 auto; }
+  .production-account { margin-left: 0; }
+  .account-name { color: #fff; }
+  .production-layout { display: block; min-height: calc(100vh - 62px); }
+  .production-nav { width: 100%; padding: 8px; flex-direction: row; overflow-x: auto; background: #062f57; border: 0; }
+  .production-nav::after { display: none; }
+  .production-nav .nav-link { width: auto; height: 36px; flex: 0 0 auto; white-space: nowrap; }
+  .main-content { padding: 18px 14px 36px; }
+  .page-heading { min-height: 58px; align-items: flex-start; }
+  .page-heading h1 { font-size: 24px; }
 }
