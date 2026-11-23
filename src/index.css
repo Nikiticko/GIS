@@ -821,6 +821,28 @@ body {
   .login-page { padding: 16px; overflow: hidden; }
   .login-card { width: calc(100vw - 32px); max-width: 400px; padding: 28px 24px; }
 }
+
+.topbar .brand-mark {
+  width: 39px;
+  height: 39px;
+  flex: 0 0 39px;
+  padding: 1px;
+  background: #edf7ff;
+  border: 0;
+  border-radius: 9px;
+  box-shadow: none;
+}
+.topbar .brand-mark img { width: 37px; height: 37px; }
+
+@media (max-width: 860px) {
+  .topbar .brand-mark { width: 36px; height: 36px; flex-basis: 36px; }
+  .topbar .brand-mark img { width: 34px; height: 34px; }
+}
+
+@media (max-width: 640px) {
+  .topbar .brand-mark { width: 33px; height: 33px; flex-basis: 33px; }
+  .topbar .brand-mark img { width: 31px; height: 31px; }
+}
 @media (max-width: 520px) {
   .account-name, .telegram-connect-label { display: none; }
   .telegram-connect-button { width: 32px; padding: 0; }
