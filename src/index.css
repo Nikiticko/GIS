@@ -906,7 +906,23 @@ body {
   .schedule-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .project-filter-panel:not(.has-manager-filter) .schedule-filter-search { grid-column: auto; }
 }
-@media (max-width: 640px) { .employee-schedule-grid { --employee-width: 140px; } .employee-schedule-person { padding: 10px; font-size: 12px; } }
+@media (max-width: 640px) {
+  .resource-schedule-page { gap: 12px; }
+  .resource-schedule-page .page-heading { min-height: 0; gap: 8px; }
+  .resource-schedule-page .page-heading h1 { font-size: 20px; }
+  .resource-schedule-page .page-subtitle { font-size: 11px; }
+  .resource-schedule-page .employee-schedule-controls { gap: 7px; }
+  .resource-schedule-page .employee-schedule-controls .production-actions { gap: 5px; }
+  .resource-schedule-page .employee-schedule-controls button { min-height: 30px; padding: 5px 9px; font-size: 11px; }
+  .resource-schedule-page .month-controls { gap: 5px; }
+  .resource-schedule-page .month-controls strong { min-width: 108px; font-size: 11px; }
+  .resource-schedule-page .employee-schedule-grid { --employee-width: 108px; --employee-day-width: 92px !important; --employee-row-height: 88px; }
+  .resource-schedule-page .employee-schedule-person { gap: 3px; padding: 7px; font-size: 10px; line-height: 1.25; }
+  .resource-schedule-page .employee-schedule-person > span { font-size: 9px; }
+  .resource-schedule-page .employee-schedule-date { gap: 1px; padding: 6px 3px; font-size: 10px; }
+  .resource-schedule-page .employee-schedule-free { padding: 8px; font-size: 10px; }
+  .resource-schedule-page .employee-schedule-event { gap: 2px; margin: 3px; padding: 5px; border-radius: 5px; font-size: 9px; line-height: 1.2; }
+}
 .production-month-day { z-index: 1; grid-row: 1; align-self: center; justify-self: start; width: 26px; height: 26px; margin-left: 7px; border-radius: 50%; color: #536a7e; font-size: 12px; line-height: 26px; text-align: center; pointer-events: none; }
 .production-month-day.outside-month { color: #a5b1bc; }
 .production-month-day.today { color: #fff; background: #2e618a; font-weight: 700; }

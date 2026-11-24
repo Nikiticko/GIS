@@ -19,7 +19,7 @@ export function ProductionEmployeeSchedule({ employees, rows, onOpen }: {
   function move(amount: number) {
     setAnchor(mode === "week" ? new Date(`${addDays(amount * 7, anchor)}T00:00:00`) : new Date(anchor.getFullYear(), anchor.getMonth() + amount, 1));
   }
-  return <section className="page-stack">
+  return <section className="page-stack resource-schedule-page">
     <div className="page-heading schedule-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>Працівники</h1><p className="page-subtitle">Зайнятість за виробничими планами об’єктів</p></div>
       <div className="employee-schedule-controls"><div className="production-actions"><Button variant={mode === "week" ? "default" : "outline"} aria-pressed={mode === "week"} onClick={() => setMode("week")}>Тиждень</Button><Button variant={mode === "month" ? "default" : "outline"} aria-pressed={mode === "month"} onClick={() => setMode("month")}>Місяць</Button></div>
         <div className="month-controls"><Button variant="outline" size="icon" aria-label="Попередній період" onClick={() => move(-1)}><ChevronLeft /></Button><strong aria-live="polite">{label}</strong><Button variant="outline" size="icon" aria-label="Наступний період" onClick={() => move(1)}><ChevronRight /></Button><Button variant="outline" onClick={() => setAnchor(new Date())}>Сьогодні</Button></div>
@@ -31,7 +31,7 @@ export function ProductionEmployeeSchedule({ employees, rows, onOpen }: {
         {[...employees].sort((a, b) => a.name.localeCompare(b.name, "uk") || a.id.localeCompare(b.id)).map((employee) => {
           const events = assignProjectCalendarLanes(visible.filter((row) => row.employeeIds?.includes(employee.id)).map((row) => ({ row, startDate: row.project.plannedStart!, endDate: row.project.plannedEnd! })));
           const laneCount = Math.max(1, ...events.map(({ lane }) => lane + 1));
-          return <div key={employee.id} className="employee-schedule-row" style={{ gridTemplateRows: `repeat(${laneCount}, minmax(122px, auto))` }} aria-label={employee.name}>
+          return <div key={employee.id} className="employee-schedule-row" style={{ gridTemplateRows: `repeat(${laneCount}, minmax(var(--employee-row-height, 122px), auto))` }} aria-label={employee.name}>
             <div className="employee-schedule-person" style={{ gridRow: "1 / -1" }}><strong>{employee.name}</strong><span>{employee.phone || "Телефон не вказано"}</span>{employee.foreman && <span>Бригадир</span>}{!employee.active && <span>Неактивний</span>}</div>
             {days.map((day, index) => <div aria-hidden="true" key={day} className={`employee-schedule-day ${day === today ? "is-today" : ""}`} style={{ gridColumn: index + 2, gridRow: "1 / -1" }} />)}
             {!events.length && <span className="employee-schedule-free" style={{ gridColumn: `2 / ${days.length + 2}`, gridRow: 1 }}>Призначень у цьому періоді немає</span>}
