@@ -89,7 +89,7 @@ export function ProductionMonthCalendar({ rows, employeeId, onOpen, onSelectDate
   function move(amount: number) { setMonth((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1)); }
 
   return <section className="page-stack" onKeyDown={(event) => { if (event.key === "Escape") setSelectionStart(null); }}>
-    <div className="page-heading schedule-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{employee ? "Мій графік" : "Графік виробництва"}</h1><p className="page-subtitle">{employee ? "Ваші об’єкти та всі підтверджені об’єкти за місяць" : "Об’єкти за бажаними та виробничими датами"}</p></div>
+    <div className="page-heading schedule-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{employee ? "Мій графік" : "Графік виробництва"}</h1><p className="page-subtitle">{employee ? "Усі підтверджені об’єкти за місяць" : "Об’єкти за бажаними та виробничими датами"}</p></div>
       <div className="month-controls"><Button type="button" variant="outline" size="icon" aria-label="Попередній місяць" onClick={() => move(-1)}><ChevronLeft /></Button><strong aria-live="polite">{label}</strong><Button type="button" variant="outline" size="icon" aria-label="Наступний місяць" onClick={() => move(1)}><ChevronRight /></Button><Button type="button" variant="outline" onClick={() => { const now = new Date(); setMonth(new Date(now.getFullYear(), now.getMonth(), 1)); }}>Сьогодні</Button></div>
     </div>
     <Button type="button" variant="outline" className="schedule-filter-toggle" aria-expanded={filtersOpen} aria-controls="schedule-filters" onClick={() => setFiltersOpen((open) => !open)}>Фільтри{filtersActive ? " •" : ""}</Button>

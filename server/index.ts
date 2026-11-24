@@ -573,7 +573,7 @@ app.get("/api/projects", async (request, reply) => {
   if (actor.role === "MANAGER" && scope !== "schedule") conditions.push(eq(projects.managerId, actor.id));
   if (scope === "schedule") conditions.push(sql`(${projects.plannedStart} is not null or ${projects.desiredStart} is not null)`);
   if (actor.role === "PRODUCTION_EMPLOYEE") conditions.push(scope === "schedule"
-    ? sql`(${projects.confirmedAt} is not null or exists (select 1 from ${assignments} where ${assignments.projectId} = ${projects.id} and ${assignments.userId} = ${actor.id}))`
+    ? isNotNull(projects.confirmedAt)
     : sql`exists (select 1 from ${assignments} where ${assignments.projectId} = ${projects.id} and ${assignments.userId} = ${actor.id})`);
   if (scope === "schedule") return db.select({
     project: projects, workTypeName: workTypes.name, status: statusSql,
