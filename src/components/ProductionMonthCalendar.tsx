@@ -28,7 +28,8 @@ function eventsForWeek(events: CalendarEvent[], days: string[]) {
   return { events: placed, laneCount: laneEnds.length };
 }
 
-export function ProductionMonthCalendar({ rows, employee, onOpen, onSelectDates }: { rows: ScheduleRow[]; employee: boolean; onOpen: (id: string) => void; onSelectDates?: (start: string, end: string) => void }) {
+export function ProductionMonthCalendar({ rows, employeeId, onOpen, onSelectDates }: { rows: ScheduleRow[]; employeeId?: string; onOpen: (id: string) => void; onSelectDates?: (start: string, end: string) => void }) {
+  const employee = Boolean(employeeId);
   const [selectionStart, setSelectionStart] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -88,7 +89,7 @@ export function ProductionMonthCalendar({ rows, employee, onOpen, onSelectDates 
   function move(amount: number) { setMonth((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1)); }
 
   return <section className="page-stack" onKeyDown={(event) => { if (event.key === "Escape") setSelectionStart(null); }}>
-    <div className="page-heading schedule-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{employee ? "Мій графік" : "Графік виробництва"}</h1><p className="page-subtitle">{employee ? "Призначені вам об’єкти за місяць" : "Об’єкти за бажаними та виробничими датами"}</p></div>
+    <div className="page-heading schedule-heading"><div><p className="eyebrow">ВИРОБНИЦТВО</p><h1>{employee ? "Мій графік" : "Графік виробництва"}</h1><p className="page-subtitle">{employee ? "Ваші об’єкти та всі підтверджені об’єкти за місяць" : "Об’єкти за бажаними та виробничими датами"}</p></div>
       <div className="month-controls"><Button type="button" variant="outline" size="icon" aria-label="Попередній місяць" onClick={() => move(-1)}><ChevronLeft /></Button><strong aria-live="polite">{label}</strong><Button type="button" variant="outline" size="icon" aria-label="Наступний місяць" onClick={() => move(1)}><ChevronRight /></Button><Button type="button" variant="outline" onClick={() => { const now = new Date(); setMonth(new Date(now.getFullYear(), now.getMonth(), 1)); }}>Сьогодні</Button></div>
     </div>
     <Button type="button" variant="outline" className="schedule-filter-toggle" aria-expanded={filtersOpen} aria-controls="schedule-filters" onClick={() => setFiltersOpen((open) => !open)}>Фільтри{filtersActive ? " •" : ""}</Button>
@@ -107,7 +108,16 @@ export function ProductionMonthCalendar({ rows, employee, onOpen, onSelectDates 
         {days.map((day, index) => onSelectDates ? <button type="button" className={`production-month-cell selectable ${day.startsWith(monthPrefix) ? "" : "outside-month"} ${day === today ? "today" : ""} ${day === selectionStart ? "selection-start" : ""}`} aria-label={`${selectionStart ? "Завершення" : "Початок"}: ${formatDate(day)}`} aria-pressed={day === selectionStart} onClick={() => selectDay(day)} key={day} style={{ gridColumn: index + 1 }} /> : <div className={`production-month-cell ${day.startsWith(monthPrefix) ? "" : "outside-month"} ${day === today ? "today" : ""}`} aria-label={formatDate(day)} key={day} style={{ gridColumn: index + 1 }} />)}
         {onSelectDates && selectionStart && days.includes(selectionStart) && <div className="production-month-event calendar-draft" style={{ gridColumn: days.indexOf(selectionStart) + 1, gridRow: laneCount + 2 }}><span><strong>Новий об’єкт</strong><span>Оберіть завершення</span></span></div>}
         {days.map((day, index) => <span className={`production-month-day ${day.startsWith(monthPrefix) ? "" : "outside-month"} ${day === today ? "today" : ""}`} aria-hidden="true" key={day} style={{ gridColumn: index + 1 }}>{Number(day.slice(-2))}</span>)}
-        {events.map((event) => <button key={event.row.project.id} type="button" className={`production-month-event status-${event.row.status.toLowerCase().replace("_", "-")} ${event.start < days[0] ? "continues-before" : ""} ${event.end > days[6] ? "continues-after" : ""}`} style={{ gridColumn: `${event.first + 1} / ${event.last + 2}`, gridRow: event.lane + 2 }} title={`${event.row.project.name} · ${event.row.project.confirmedAt ? "100%" : "Попередньо"} · ${statusLabels[event.row.status]} · ${formatDate(event.start)} — ${formatDate(event.end)}`} onClick={() => { setSelectionStart(null); onOpen(event.row.project.id); }}><span><strong>{event.row.project.name} · {event.row.project.confirmedAt ? "100%" : "Попередньо"}</strong><span>Менеджер: {event.row.managerName}</span><span>Тип робіт: {event.row.workTypeName}</span><span>Обсяг: {event.row.project.volume || "Не вказано"}</span>{event.row.status !== "NEW" && <><span>Бригада: {event.row.team.join(", ") || "Не призначена"}</span><span>Автомобілі: {event.row.vehicles.join(", ") || "Не призначені"}</span></>}</span></button>)}
+        {events.map((event) => {
+          const canOpen = !employeeId || event.row.employeeIds.includes(employeeId);
+          const className = `production-month-event status-${event.row.status.toLowerCase().replace("_", "-")} ${event.start < days[0] ? "continues-before" : ""} ${event.end > days[6] ? "continues-after" : ""}`;
+          const style = { gridColumn: `${event.first + 1} / ${event.last + 2}`, gridRow: event.lane + 2 };
+          const title = `${event.row.project.name} · ${event.row.project.confirmedAt ? "100%" : "Попередньо"} · ${statusLabels[event.row.status]} · ${formatDate(event.start)} — ${formatDate(event.end)}`;
+          const content = <span><strong>{event.row.project.name} · {event.row.project.confirmedAt ? "100%" : "Попередньо"}</strong><span>Менеджер: {event.row.managerName}</span><span>Тип робіт: {event.row.workTypeName}</span><span>Обсяг: {event.row.project.volume || "Не вказано"}</span>{event.row.status !== "NEW" && <><span>Бригада: {event.row.team.join(", ") || "Не призначена"}</span><span>Автомобілі: {event.row.vehicles.join(", ") || "Не призначені"}</span></>}</span>;
+          return canOpen
+            ? <button key={event.row.project.id} type="button" className={className} style={style} title={title} onClick={() => { setSelectionStart(null); onOpen(event.row.project.id); }}>{content}</button>
+            : <div key={event.row.project.id} className={className} style={style} title={title}>{content}</div>;
+        })}
       </div>)}
     </div></div>
     <div className="production-month-legend" aria-label="Кольори статусів">{(Object.keys(statusLabels) as Status[]).map((status) => <span key={status}><i className={`status-${status.toLowerCase().replace("_", "-")}`} />{statusLabels[status]}</span>)}</div>
